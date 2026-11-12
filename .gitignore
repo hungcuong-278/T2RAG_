@@ -1,0 +1,12 @@
+# Kết quả chạy, cache, embedding: không đưa lên GitHub
+outputs/
+tables/
+*.zip
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.idea/
+.vscode/
+.env
+*.log
+~$*
