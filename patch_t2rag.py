@@ -132,4 +132,39 @@ patch("src/llm/openai_gpt.py",
       "http_client=client, max_retries=self.max_retries)",
       "http_client=client, max_retries=2)")
 
+print("Vietnamese support (only active when T2RAG_LANG=vi; English runs are unchanged)...")
+# EM/F1: the repo drops "a/an/the" (but "an" is a Vietnamese syllable: Tràng An, Lê Văn An),
+# removes only ASCII punctuation and does not NFC-normalise.
+patch("src/utils/eval_utils.py",
+      "import re\nimport string\n",
+      "import os\nimport re\nimport string\nimport unicodedata\n",
+      marker="import unicodedata\n")
+patch("src/utils/eval_utils.py",
+      "    return white_space_fix(remove_articles(remove_punc(lower(answer))))",
+      "    if os.environ.get(\"T2RAG_LANG\", \"en\").lower() == \"vi\":  # colab patch: Vietnamese answers\n"
+      "        text = unicodedata.normalize(\"NFC\", answer).lower()\n"
+      "        text = \"\".join(\" \" if unicodedata.category(ch).startswith(\"P\") else ch for ch in text)\n"
+      "        return white_space_fix(text)\n"
+      "    return white_space_fix(remove_articles(remove_punc(lower(answer))))",
+      marker="# colab patch: Vietnamese answers")
+# HippoRAG graph keys: text_processing keeps only [A-Za-z0-9], so "Trần Hưng Đạo" became "tr n h ng o".
+patch("src/utils/misc_utils.py",
+      "import numpy as np\nimport re\n",
+      "import numpy as np\nimport os\nimport re\nimport unicodedata\n",
+      marker="import unicodedata\n")
+patch("src/utils/misc_utils.py",
+      "    return re.sub('[^A-Za-z0-9 ]', ' ', text.lower()).strip()",
+      "    if os.environ.get(\"T2RAG_LANG\", \"en\").lower() == \"vi\":  # colab patch: keep Vietnamese letters\n"
+      "        text = unicodedata.normalize(\"NFC\", text).lower()\n"
+      "        return \" \".join(re.sub(r'[^\\w ]', ' ', text).replace('_', ' ').split())\n"
+      "    return re.sub('[^A-Za-z0-9 ]', ' ', text.lower()).strip()",
+      marker="# colab patch: keep Vietnamese letters")
+
+# HippoRAG skips synonym search for entities with <= 2 ASCII letters ("Hồ", "Lý" have only one).
+patch("src/HippoRAG.py",
+      "            if len(re.sub('[^A-Za-z0-9]', '', entity)) > 2:",
+      "            if len(re.sub(r'[\\W_]' if os.environ.get('T2RAG_LANG', 'en').lower() == 'vi' "
+      "else '[^A-Za-z0-9]', '', entity)) > 2:  # colab patch: Vietnamese letters count",
+      marker="# colab patch: Vietnamese letters count")
+
 print("Done.")

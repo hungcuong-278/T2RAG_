@@ -71,5 +71,47 @@ class TestRunColab(unittest.TestCase):
         self.assertEqual(data["records"][0]["id"], 1)
 
 
+class TestOpenieGuard(unittest.TestCase):
+    """HippoRAG must not re-extract triplets (English prompts) or rewrite the OpenIE file."""
+
+    def test_missing_chunks_detected(self):
+        import run_colab
+        root = fe.tmpdir()
+        try:
+            make_dataset(root)
+            path = os.path.join(root, "outputs", "fake_univ", "openie_results_ner.json")
+            docs = [f"{t}\n{x}" for t, x in fe.DOCS]
+            self.assertEqual(run_colab.missing_openie_chunks(path, docs), [])
+            changed = docs[:1] + [docs[1] + " (edited)"] + docs[2:]
+            self.assertEqual(len(run_colab.missing_openie_chunks(path, changed)), 1)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_hippo_stops_before_any_llm_call(self):
+        import run_colab
+        root = fe.tmpdir()
+        make_dataset(root)
+        corpus_path = os.path.join(root, "reproduce", "dataset", "fake_corpus.json")
+        corpus = json.load(open(corpus_path))
+        corpus.append({"title": "New page", "text": "A passage without triplets."})
+        json.dump(corpus, open(corpus_path, "w"))
+        oie = os.path.join(root, "outputs", "fake_univ", "openie_results_ner.json")
+        before = run_colab.file_md5(oie)
+        old_cwd, old_argv = os.getcwd(), sys.argv
+        os.environ.setdefault("GOOGLE_API_KEY", "fake")
+        try:
+            os.chdir(root)
+            sys.argv = ["run_colab.py", "--dataset", "fake", "--llm_name", "fake-llm",
+                        "--embedding_name", "fake-embedding", "--method", "hippo", "--limit", "1"]
+            with self.assertRaises(SystemExit) as ctx:
+                run_colab.main()
+            self.assertIn("1/7 passages have no triplets", str(ctx.exception))
+            self.assertEqual(run_colab.file_md5(oie), before)
+        finally:
+            os.chdir(old_cwd)
+            sys.argv = old_argv
+            shutil.rmtree(root, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

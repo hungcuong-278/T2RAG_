@@ -38,6 +38,8 @@ def main(argv=None):
     ap.add_argument("--root", default=".", help="Repo root")
     ap.add_argument("--max_answer_words", type=int, default=8)
     ap.add_argument("--dev_size", type=int, default=50)
+    ap.add_argument("--openie_md5", default=None,
+                    help="Expected MD5 (or its first characters) of the OpenIE file, e.g. from the data release")
     args = ap.parse_args(argv)
 
     errors, warnings = [], []
@@ -130,6 +132,13 @@ def main(argv=None):
     if not os.path.exists(oie_path):
         err(f"Thiếu file bộ ba {oie_path}")
     else:
+        actual_md5 = hashlib.md5(open(oie_path, "rb").read()).hexdigest()
+        if args.openie_md5:
+            want = args.openie_md5.strip().rstrip(".…").lower()
+            if not actual_md5.startswith(want):
+                err(f"MD5 file bộ ba là {actual_md5}, khác bản phát hành ({want}…): file đã bị thay đổi "
+                    "(ví dụ HippoRAG ghi đè). Chép lại bản trong data_vi/release/")
+        print(f"  MD5 file bộ ba: {actual_md5}")
         oie = json.load(open(oie_path, encoding="utf-8"))
         docs = oie.get("docs") if isinstance(oie, dict) else None
         if docs is None:

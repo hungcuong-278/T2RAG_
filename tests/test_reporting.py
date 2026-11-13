@@ -224,6 +224,15 @@ class TestCheckDataset(unittest.TestCase):
         import check_vnhistory
         self.assertEqual(check_vnhistory.main(["--dataset", "fake", "--root", self.root, "--dev_size", "1"]), 0)
 
+    def test_openie_md5(self):
+        import check_vnhistory
+        import hashlib
+        oie = os.path.join(self.root, "outputs", "fake_univ", "openie_results_ner.json")
+        md5 = hashlib.md5(open(oie, "rb").read()).hexdigest()
+        base = ["--dataset", "fake", "--root", self.root, "--dev_size", "1"]
+        self.assertEqual(check_vnhistory.main(base + ["--openie_md5", md5[:8] + "…"]), 0)
+        self.assertEqual(check_vnhistory.main(base + ["--openie_md5", "00000000"]), 1)
+
     def test_broken_dataset_fails(self):
         import check_vnhistory
         data = json.load(open(self.qpath))
