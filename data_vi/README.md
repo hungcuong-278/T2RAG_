@@ -12,7 +12,7 @@ Vietnamese history corpus (Lý – Trần – Hồ – Lê sơ, 1009–1527) and
 | `data_vi/articles.txt` | The 158 article titles |
 | `data_vi/*.py` | Pipeline scripts (below) |
 
-Questions (`reproduce/dataset/vnhistory.json`) are not released yet: 131 drafts are under manual review.
+Questions (`reproduce/dataset/vnhistory.json`) are not released yet: 131 of 178 drafts are reviewed; the last batch (47 two- and three-hop questions) is under manual review.
 
 ## Use with the T²RAG code
 
@@ -46,7 +46,20 @@ python data_vi/openie_vi.py build            # writes outputs/vnhistory_univ/ope
 python data_vi/validate_dataset.py --openie
 ```
 
-`find_chains.py` and `build_questions.py` support writing multi-hop questions (bridge candidates, pre-checks, review sheets).
+`find_chains.py` and `build_questions.py` support writing multi-hop questions (bridge candidates, pre-checks, review sheets). Drafts live in `data_vi/work/questions_draft.jsonl` (not released).
+
+```bash
+python data_vi/build_questions.py --precheck        # automatic checks on all drafts
+python data_vi/build_questions.py --build           # writes reproduce/dataset/vnhistory.json (reviewed drafts only)
+python data_vi/validate_dataset.py --questions      # contract 2.3, criteria K3-K6, K9, dev/test split
+```
+
+Question file layout:
+
+- Only drafts with `status=ok` are exported; `--build` refuses to run while some drafts are unreviewed (`--allow_pending` for a trial build).
+- The first 50 questions are dev (15 one-hop, 23 two-hop, 12 three-hop, interleaved), the rest is test. Dev and test never share the passage that holds the final answer.
+- Supporting paragraphs come first, in step order, copied verbatim from the corpus. `--distractors N` adds N non-supporting paragraphs (most word overlap with the question); default 0.
+- Extra fields beyond the contract: `split`, `qtype` (`single` / `chain`), `draft_id`, `idx` in each paragraph, `paragraph_support_idx` in each decomposition step.
 
 ## Notes for the code session
 
