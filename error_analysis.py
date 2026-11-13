@@ -47,8 +47,14 @@ LABEL_VI = {
 
 
 # ---------------------------------------------------------------- text helpers
+LANG = {"value": "en"}  # set from the run (summary.lang, or vi for vnhistory*)
+
+
 def norm(text):
     text = unicodedata.normalize("NFC", str(text)).lower()
+    if LANG["value"] == "vi":  # Unicode punctuation; keep "an" (a Vietnamese syllable)
+        text = "".join(" " if unicodedata.category(ch).startswith("P") else ch for ch in text)
+        return " ".join(text.split())
     text = "".join(" " if ch in string.punctuation else ch for ch in text)
     text = re.sub(r"\b(a|an|the)\b", " ", text)
     return " ".join(text.split())
@@ -166,6 +172,7 @@ def label_run(result_path, dataset_path, trace_dir, alias_groups, f1_threshold):
     with open(result_path, encoding="utf-8") as f:
         data = json.load(f)
     s = data["summary"]
+    LANG["value"] = s.get("lang") or ("vi" if str(s.get("dataset", "")).startswith("vnhistory") else "en")
     dataset_path = dataset_path or os.path.join("reproduce", "dataset", f"{s['dataset']}.json")
     gold = load_dataset(dataset_path) if os.path.exists(dataset_path) else {}
     trace_dir = trace_dir or s.get("trace_dir") or ""
@@ -224,6 +231,9 @@ def main(argv=None):
     ap.add_argument("--out_dir", default=None)
     args = ap.parse_args(argv)
 
+    with open(args.result, encoding="utf-8") as f:  # language first: aliases are normalised with it
+        s0 = json.load(f)["summary"]
+    LANG["value"] = s0.get("lang") or ("vi" if str(s0.get("dataset", "")).startswith("vnhistory") else "en")
     alias_groups = load_aliases(args.aliases)
     s, rows, n_trace, trace_dir = label_run(args.result, args.dataset_file, args.trace_dir, alias_groups,
                                             args.f1_threshold)
