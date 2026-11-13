@@ -10,3 +10,8 @@ __pycache__/
 .env
 *.log
 ~$*
+
+# Data session: API cache, raw downloads, run logs (rebuildable, large)
+data_vi/cache/
+data_vi/work/raw/
+data_vi/work/logs/

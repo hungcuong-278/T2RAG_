@@ -24,6 +24,7 @@ Repo này chứa **code nhóm viết thêm** trên nền phương pháp T²RAG:
 | `tests/` | 29 bài test dùng LLM giả (không tốn API) |
 | `notebooks/T2RAG_Colab_v2.ipynb` | Notebook Colab chạy toàn bộ thí nghiệm (sinh bởi `build_notebook_v2.py`) |
 | `docs/` | Hướng dẫn chạy và kế hoạch thí nghiệm |
+| `data_vi/`, `reproduce/dataset/vnhistory_corpus.json` | Bộ dữ liệu lịch sử Việt Nam: kho 896 đoạn, bộ ba OpenIE, script dựng dữ liệu (xem `data_vi/README.md`) |
 
 ## Chạy trên Google Colab
 

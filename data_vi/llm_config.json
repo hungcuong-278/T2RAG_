@@ -1,0 +1,15 @@
+{
+  "model": "gemini-3.8-flash",
+  "api_format": "anthropic",
+  "base_url": "https://1gw.gwai.cloud",
+  "api_key_env": "GWAI_API_KEY",
+  "min_interval": 2.0,
+  "max_calls": 0,
+  "reasoning_effort": null,
+  "workers": 3,
+  "extra_body": {},
+  "thinking": "default",
+  "price_in": 0.75,
+  "price_out": 3.75,
+  "key_budget": 8.3
+}
