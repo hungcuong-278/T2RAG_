@@ -3,6 +3,8 @@
 Run from the project root:
     python data_vi/build_questions.py --precheck              # automatic checks on all drafts
     python data_vi/build_questions.py --sheet --batch 1       # review sheet (CSV) for one batch
+    python data_vi/build_questions.py --build                 # write reproduce/dataset/vnhistory.json
+    python data_vi/build_questions.py --build --allow_pending --out data_vi/work/vnhistory_preview.json
 
 Automatic checks (codes follow the K1-K9 criteria of the plan):
   ERR  chunk      a step points to an unknown chunk id
@@ -17,6 +19,7 @@ Automatic checks (codes follow the K1-K9 criteria of the plan):
 """
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
@@ -29,6 +32,9 @@ import find_chains  # noqa: E402
 
 WORK = os.path.join("data_vi", "work")
 DRAFTS = os.path.join(WORK, "questions_draft.jsonl")
+OUT = os.path.join("reproduce", "dataset", "vnhistory.json")
+DEV_QUOTA = {1: 15, 2: 23, 3: 12}  # 50 dev questions, the rest is test
+SEED = "vnhistory-v1"
 
 
 def nfc(text):
@@ -91,11 +97,130 @@ def check(drafts):
     return results, by_id
 
 
+# ---------------------------------------------------------------- build (M3.5)
+
+def rank_key(draft_id):
+    """Stable pseudo-random rank: adding new drafts does not reshuffle existing ones."""
+    return hashlib.md5((SEED + draft_id).encode("utf-8")).hexdigest()
+
+
+def pick_dev(items):
+    """Choose DEV_QUOTA questions per hop count.
+
+    Questions that share a final-step chunk always go to the same split, so dev and
+    test never share the chunk that holds the final answer.
+    """
+    groups = {}
+    for d in items:
+        groups.setdefault(d["steps"][-1]["chunk"], []).append(d)
+    left = dict(DEV_QUOTA)
+    dev = set()
+    for chunk in sorted(groups, key=lambda c: min(rank_key(d["draft_id"]) for d in groups[c])):
+        need = Counter(d["hops"] for d in groups[chunk])
+        if all(left.get(h, 0) >= n for h, n in need.items()):
+            for h, n in need.items():
+                left[h] -= n
+            dev.update(d["draft_id"] for d in groups[chunk])
+        if not any(left.values()):
+            break
+    if any(left.values()):
+        sys.exit(f"Not enough questions for the dev quota, still missing {left}")
+    return dev
+
+
+def interleave(items):
+    """Mix hop counts evenly: each question sits at its relative position within its hop group."""
+    by_hop = {}
+    for d in sorted(items, key=lambda d: rank_key(d["draft_id"])):
+        by_hop.setdefault(d["hops"], []).append(d)
+    keyed = [((i + 0.5) / len(g), h, d) for h, g in by_hop.items() for i, d in enumerate(g)]
+    return [d for _, _, d in sorted(keyed, key=lambda x: (x[0], x[1]))]
+
+
+def words(text):
+    return set(re.findall(r"\w+", low(text)))
+
+
+def distractors(d, meta, n):
+    """Top-n non-supporting chunks by word overlap with the question (MuSiQue-style negatives)."""
+    if n <= 0:
+        return []
+    used = {s["chunk"] for s in d["steps"]}
+    q = words(d["question"])
+    scored = [(-len(q & words(m["title"] + " " + m["text"])), m["short_id"]) for m in meta if m["short_id"] not in used]
+    return [cid for _, cid in sorted(scored)[:n]]
+
+
+def build(drafts, results, by_id, meta, out, n_distract, allow_pending):
+    pending = [d["draft_id"] for d in drafts if d.get("status") not in ("ok", "loai")]
+    if pending and not allow_pending:
+        sys.exit(f"{len(pending)} drafts are not reviewed yet ({pending[0]}..{pending[-1]}). "
+                 "Fill the review sheet first, or pass --allow_pending for a trial build.")
+    items = [d for d in drafts if d.get("status") == "ok"]
+    bad = [d["draft_id"] for d in items if results[d["draft_id"]][0]]
+    if bad:
+        sys.exit(f"Reviewed questions still fail the precheck: {', '.join(bad)}")
+
+    dev = pick_dev(items)
+    ordered = interleave([d for d in items if d["draft_id"] in dev]) + \
+        interleave([d for d in items if d["draft_id"] not in dev])
+
+    counters = Counter()
+    samples = []
+    for d in ordered:
+        counters[d["hops"]] += 1
+        paragraphs = []
+        for cid in [s["chunk"] for s in d["steps"]] + distractors(d, meta, n_distract):
+            m = by_id[cid]
+            paragraphs.append({
+                "idx": len(paragraphs),
+                "title": m["title"],
+                "paragraph_text": m["text"],  # copied verbatim: title + "\n" + text must match the corpus
+                "is_supporting": len(paragraphs) < len(d["steps"]),
+            })
+        aliases = []
+        for a in d["answer_aliases"]:
+            if a.strip() and low(a) != low(d["answer"]) and a not in aliases:
+                aliases.append(a)
+        samples.append({
+            "id": f"{d['hops']}hop_{counters[d['hops']]:03d}",
+            "question": d["question"],
+            "answer": d["answer"],
+            "answer_aliases": aliases,
+            "paragraphs": paragraphs,
+            "question_decomposition": [
+                {"question": s["question"], "answer": s["answer"], "paragraph_support_idx": i}
+                for i, s in enumerate(d["steps"])
+            ],
+            "split": "dev" if d["draft_id"] in dev else "test",
+            "qtype": d["qtype"],
+            "draft_id": d["draft_id"],
+        })
+
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(samples, f, ensure_ascii=False, indent=1)
+
+    def hops_of(split):
+        c = Counter(s["id"][0] for s in samples if s["split"] == split)
+        return "/".join(str(c[h]) for h in "123")
+    dev_last = {d["steps"][-1]["chunk"] for d in items if d["draft_id"] in dev}
+    test_last = {d["steps"][-1]["chunk"] for d in items if d["draft_id"] not in dev}
+    print(f"\nWrote {out}: {len(samples)} questions "
+          f"(dev {hops_of('dev')}, test {hops_of('test')} as 1/2/3-hop), "
+          f"{n_distract} distractors each; skipped {len(drafts) - len(items)} not-ok drafts; "
+          f"shared final chunks dev/test: {len(dev_last & test_last)}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--precheck", action="store_true")
     ap.add_argument("--sheet", action="store_true", help="Write a CSV review sheet")
     ap.add_argument("--batch", type=int, default=None)
+    ap.add_argument("--build", action="store_true", help="Write the final question file (only status=ok)")
+    ap.add_argument("--out", default=OUT)
+    ap.add_argument("--distractors", type=int, default=0, help="Non-supporting paragraphs per question")
+    ap.add_argument("--allow_pending", action="store_true", help="Build even if some drafts are not reviewed")
     args = ap.parse_args()
     drafts = load_drafts()
     if args.batch is not None:
@@ -129,6 +254,12 @@ def main():
                             " ".join(["ERR " + ",".join(errs)] if errs else []) + (" WARN " + ",".join(warns) if warns else ""),
                             decomp, sup[0], sup[1], sup[2], d["status"], d["reason"], d["reviewer"], d["note"]])
         print(f"Review sheet: {path}")
+
+    if args.build:
+        if args.batch is not None:
+            sys.exit("--build uses all batches; drop --batch")
+        meta, _ = find_chains.load()
+        build(drafts, results, by_id, meta, args.out, args.distractors, args.allow_pending)
 
 
 if __name__ == "__main__":
