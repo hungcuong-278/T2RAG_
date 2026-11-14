@@ -10,16 +10,17 @@ Vietnamese history corpus (Lý – Trần – Hồ – Lê sơ, 1009–1527) and
 | `data_vi/release/openie_results_ner.json` | OpenIE for all 896 passages: 12,015 entities, 10,815 triples (12.1 per passage). MD5 `f6ff5da78046518fc3458c495fd2895a` |
 | `data_vi/work/chunks_meta.jsonl` | Per-passage metadata: short id (`c0000`–`c0895`), section, source page and revision |
 | `data_vi/articles.txt` | The 158 article titles |
+| `reproduce/dataset/vnhistory.json` | 166 reviewed questions (58 one-hop, 73 two-hop, 35 three-hop), MuSiQue layout; dev = first 50 (15/23/12), test = 116 (43/50/23). MD5 `b07cfa13dc9abc164da85f5b201471f5` |
 | `data_vi/*.py` | Pipeline scripts (below) |
 
-Questions (`reproduce/dataset/vnhistory.json`) are not released yet: 131 of 178 drafts are reviewed; the last batch (47 two- and three-hop questions) is under manual review.
+Questions: 178 drafts were written in three batches and reviewed by hand against criteria K1–K9; 166 were kept and 12 were rejected (ambiguous answer, a step that one passage alone answers, or a bridge name missing from the next passage). Five pairs of questions reach the same answer in the same final passage through different reasoning chains (d013/d152, d042/d166, d056/d145, d059/d167, d121/d164); both questions of each pair are kept.
 
 ## Use with the T²RAG code
 
 ```bash
 mkdir -p outputs/vnhistory_univ
 cp data_vi/release/openie_results_ner.json outputs/vnhistory_univ/
-python check_vnhistory.py          # corpus and OpenIE pass; only the questions file is missing for now
+python check_vnhistory.py          # corpus, OpenIE and questions: all pass
 ```
 
 `HippoRAG.index` re-extracts (with English prompts) any passage missing from this file and overwrites it. Check the MD5 after a run; copy the release file back if it changed.
