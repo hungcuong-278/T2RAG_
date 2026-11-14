@@ -10,8 +10,13 @@ Keys come from GWAI_API_KEY, GWAI_API_KEY_2, ... (environment only; never printe
 A key that hits the gateway cost limit (429 cost_limit_exceeded) is dropped and the call is
 retried with the next key. max_tokens is always raised to --max_tokens because the model
 spends most of its output budget on hidden thinking.
+
+Failed attempts are retried a few times with short pauses (--retries), then reported to the
+client as an error so its own retry logic takes over; each failure is logged with its status and
+message, and /v1/usage counts failures by kind.
 """
 import argparse
+import collections
 import json
 import os
 import sys
@@ -30,12 +35,13 @@ def load_keys():
 
 
 class Upstream:
-    def __init__(self, keys, max_tokens, timeout):
+    def __init__(self, keys, max_tokens, timeout, retries):
         if not keys:
             sys.exit("No GWAI_API_KEY* variable set")
         self.keys, self.i, self.lock = keys, 0, threading.Lock()
-        self.max_tokens, self.timeout = max_tokens, timeout
+        self.max_tokens, self.timeout, self.retries = max_tokens, timeout, retries
         self.usage = {"calls": 0, "errors": 0, "in": 0, "out": 0}
+        self.error_kinds = collections.Counter()
 
     def client(self):
         with self.lock:
@@ -58,8 +64,9 @@ class Upstream:
                   "extra_body": {"temperature": body.get("temperature", 0) or 0}}
         if system:
             kwargs["system"] = system
-        for attempt in range(8):
+        for attempt in range(self.retries + 1):
             idx, cl = self.client()
+            start = time.time()
             try:
                 resp = cl.messages.create(**kwargs)
                 text = "".join(getattr(b, "text", "") or "" for b in resp.content or [])
@@ -71,16 +78,22 @@ class Upstream:
                     self.usage["in"] += u.input_tokens or 0
                     self.usage["out"] += u.output_tokens or 0
                 return text, u.input_tokens or 0, u.output_tokens or 0, resp.stop_reason
-            except Exception as err:  # gateway errors: cost limit, overload, empty reply
+            except Exception as err:  # gateway errors: cost limit, overload, empty reply, timeout
+                status = getattr(err, "status_code", None)
+                msg = " ".join(str(getattr(err, "body", "") or err).split())
+                kind = f"{status or type(err).__name__}"
                 with self.lock:
                     self.usage["errors"] += 1
-                msg = str(getattr(err, "body", "") or err)
-                if getattr(err, "status_code", None) == 429 and "cost_limit" in msg:
+                    self.error_kinds[kind] += 1
+                print(f"[gw_proxy] {time.strftime('%H:%M:%S')} attempt {attempt + 1} failed after "
+                      f"{time.time() - start:.1f}s: {kind} {msg[:200]}", flush=True)
+                if status == 429 and "cost_limit" in msg:
                     self.drop(idx)
                     continue
-                if getattr(err, "status_code", None) in (400, 401, 403, 404):
+                if status in (400, 401, 403, 404):
                     raise
-                time.sleep(min(60, 5 * 2 ** attempt))
+                if attempt < self.retries:
+                    time.sleep(2 * 2 ** attempt)
         raise RuntimeError("gateway call failed after retries")
 
 
@@ -91,17 +104,22 @@ def make_handler(up, model_name):
 
         def send_json(self, code, obj):
             data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-            self.send_response(code)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                # The client gave up (its own timeout) before the gateway answered
+                print(f"[gw_proxy] {time.strftime('%H:%M:%S')} client closed the connection before the reply",
+                      flush=True)
 
         def do_GET(self):
             if self.path.rstrip("/").endswith("/models"):
                 self.send_json(200, {"object": "list", "data": [{"id": model_name, "object": "model"}]})
             elif self.path.rstrip("/").endswith("/usage"):
-                self.send_json(200, up.usage)
+                self.send_json(200, {**up.usage, "error_kinds": dict(up.error_kinds)})
             else:
                 self.send_json(404, {"error": {"message": "not found"}})
 
@@ -132,10 +150,11 @@ def main():
     ap.add_argument("--port", type=int, default=4000)
     ap.add_argument("--model", default="gemini-3.8-flash")
     ap.add_argument("--max_tokens", type=int, default=32000)
-    ap.add_argument("--timeout", type=float, default=300)
+    ap.add_argument("--timeout", type=float, default=300, help="Seconds to wait for one gateway reply")
+    ap.add_argument("--retries", type=int, default=3, help="Quick retries inside the proxy before reporting an error")
     args = ap.parse_args()
     keys = load_keys()
-    up = Upstream(keys, args.max_tokens, args.timeout)
+    up = Upstream(keys, args.max_tokens, args.timeout, args.retries)
     print(f"[gw_proxy] {len(keys)} key(s); listening on http://localhost:{args.port}/v1", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(up, args.model)).serve_forever()
 
