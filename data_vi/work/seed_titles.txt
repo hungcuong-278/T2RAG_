@@ -1,0 +1,201 @@
+# Seed titles for vnhistory: Ly - Tran - Ho - Le so (1009-1527).
+# One Vietnamese Wikipedia title per line; '#' starts a comment.
+# Titles are best guesses; the probe step reports missing ones and suggests real titles.
+
+# --- Dynasties, states, periods ---
+Nhà Lý
+Nhà Trần
+Nhà Hồ
+Nhà Hậu Trần
+Nhà Lê sơ
+Thời kỳ Bắc thuộc lần thứ tư
+Đại Việt
+Đại Ngu
+Chăm Pa
+
+# --- Capitals, places, monuments ---
+Thăng Long
+Hoa Lư
+Hoàng thành Thăng Long
+Thành nhà Hồ
+Lam Kinh
+Thiên Trường
+Yên Tử
+Chùa Một Cột
+Văn Miếu – Quốc Tử Giám
+
+# --- Ly kings ---
+Lý Thái Tổ
+Lý Thái Tông
+Lý Thánh Tông
+Lý Nhân Tông
+Lý Thần Tông
+Lý Anh Tông
+Lý Cao Tông
+Lý Huệ Tông
+Lý Chiêu Hoàng
+
+# --- Ly court, generals, monks ---
+Vạn Hạnh
+Ỷ Lan
+Lý Đạo Thành
+Lý Thường Kiệt
+Lê Phụng Hiểu
+Lê Văn Thịnh
+Tô Hiến Thành
+Đỗ Anh Vũ
+Trần Thủ Độ
+# v1: Trần Thị Dung -> Linh Từ Quốc mẫu
+Linh Từ Quốc mẫu
+
+# --- Tran kings ---
+Trần Thái Tông
+Trần Thánh Tông
+Trần Nhân Tông
+Trần Anh Tông
+Trần Minh Tông
+Trần Hiến Tông
+Trần Dụ Tông
+Dương Nhật Lễ
+Trần Nghệ Tông
+Trần Duệ Tông
+# v1: Trần Phế Đế -> Trần Phế Đế (Đại Việt)
+Trần Phế Đế (Đại Việt)
+Trần Thuận Tông
+Trần Thiếu Đế
+
+# --- Tran royal family, generals, officials, scholars ---
+Trần Thừa
+Trần Liễu
+Trần Hưng Đạo
+Trần Quang Khải
+Trần Nhật Duật
+Trần Khánh Dư
+Trần Bình Trọng
+Trần Quốc Toản
+Trần Ích Tắc
+Phạm Ngũ Lão
+Yết Kiêu
+Dã Tượng
+Huyền Trân
+Lê Văn Hưu
+Mạc Đĩnh Chi
+Chu Văn An
+Trương Hán Siêu
+Đoàn Nhữ Hài
+Nguyễn Hiền
+Phạm Sư Mạnh
+Trần Khát Chân
+
+# --- Ho dynasty and Later Tran ---
+Hồ Quý Ly
+Hồ Hán Thương
+Hồ Nguyên Trừng
+Giản Định Đế
+Trùng Quang Đế
+Đặng Tất
+Đặng Dung
+Nguyễn Cảnh Chân
+Nguyễn Cảnh Dị
+
+# --- Le so kings ---
+Lê Thái Tổ
+Lê Thái Tông
+Lê Nhân Tông
+Lê Nghi Dân
+Lê Thánh Tông
+Lê Hiến Tông
+Lê Túc Tông
+Lê Uy Mục
+Lê Tương Dực
+Lê Chiêu Tông
+Lê Cung Hoàng
+
+# --- Lam Son uprising and Le so court ---
+Nguyễn Trãi
+Lê Lai
+Nguyễn Chích
+Đinh Lễ
+Đinh Liệt
+Lê Sát
+Lê Ngân
+Lê Khôi
+Trần Nguyên Hãn
+Phạm Văn Xảo
+Trịnh Khả
+Nguyễn Xí
+Nguyễn Thị Lộ
+Nguyễn Thị Anh
+Ngô Thị Ngọc Dao
+Lương Thế Vinh
+Thân Nhân Trung
+Ngô Sĩ Liên
+Nguyễn Trực
+# v1: Trần Cảo -> Trần Cảo (tướng khởi nghĩa), Trần Cảo (vua)
+Trần Cảo (tướng khởi nghĩa)
+Trần Cảo (vua)
+Trịnh Duy Sản
+Mạc Đăng Dung
+
+# --- Foreign rulers and commanders ---
+Quách Quỳ
+Hốt Tất Liệt
+Ngột Lương Hợp Thai
+Thoát Hoan
+Toa Đô
+Ô Mã Nhi
+Chế Mân
+Chế Bồng Nga
+Minh Thành Tổ
+Trương Phụ
+Mộc Thạnh
+# v1: Vương Thông -> Vương Thông (tướng Nhà Minh)
+Vương Thông (tướng Nhà Minh)
+Liễu Thăng
+
+# --- Wars, battles, uprisings, assemblies ---
+# v1: Chiến tranh Tống – Việt (1075–1077) -> Chiến tranh Tống–Việt lần thứ hai, Chiến dịch đánh Tống 1075–1076
+Chiến tranh Tống–Việt lần thứ hai
+Chiến dịch đánh Tống 1075–1076
+Trận Như Nguyệt
+Chiến tranh Nguyên Mông – Đại Việt
+# v1: Chiến tranh Nguyên Mông – Đại Việt lần thứ nhất -> Chiến tranh Nguyên Mông – Đại Việt lần 1
+Chiến tranh Nguyên Mông – Đại Việt lần 1
+# v1: Chiến tranh Nguyên Mông – Đại Việt lần thứ hai -> Chiến tranh Nguyên Mông – Đại Việt lần 2
+Chiến tranh Nguyên Mông – Đại Việt lần 2
+# v1: Chiến tranh Nguyên Mông – Đại Việt lần thứ ba -> Chiến tranh Nguyên Mông – Đại Việt lần 3
+Chiến tranh Nguyên Mông – Đại Việt lần 3
+# v1: Trận Đông Bộ Đầu -> Đông Bộ Đầu
+Đông Bộ Đầu
+# v1: Trận Chương Dương -> Trận Chương Dương độ
+Trận Chương Dương độ
+# v1: Trận Hàm Tử -> dropped (no own article)
+# v1: Trận Tây Kết -> dropped (no own article)
+# v1: Trận Vân Đồn (1288) -> dropped (no own article)
+Trận Bạch Đằng (1288)
+Hội nghị Bình Than
+Hội nghị Diên Hồng
+# v1: Chiến tranh Minh – Đại Ngu -> Nhà Minh xâm lược Đại Ngu, Chiến tranh Minh – Việt (1407–1414)
+Nhà Minh xâm lược Đại Ngu
+Chiến tranh Minh – Việt (1407–1414)
+Trận Bô Cô
+Khởi nghĩa Lam Sơn
+Trận Tốt Động – Chúc Động
+Trận Chi Lăng – Xương Giang
+Hội thề Đông Quan
+# v1: Chiến tranh Việt – Chiêm 1471 -> Chiến tranh Việt – Chiêm (1471)
+Chiến tranh Việt – Chiêm (1471)
+
+# --- Texts, laws, institutions ---
+Chiếu dời đô
+Nam quốc sơn hà
+Hịch tướng sĩ
+Binh thư yếu lược
+Đại Việt sử ký
+Đại Việt sử ký toàn thư
+Bình Ngô đại cáo
+Quốc âm thi tập
+Quốc triều hình luật
+Hội Tao Đàn
+Thiền phái Trúc Lâm
+# v1: Thông bảo hội sao -> dropped (no own article)
