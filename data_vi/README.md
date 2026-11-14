@@ -11,6 +11,7 @@ Vietnamese history corpus (Lý – Trần – Hồ – Lê sơ, 1009–1527) and
 | `data_vi/work/chunks_meta.jsonl` | Per-passage metadata: short id (`c0000`–`c0895`), section, source page and revision |
 | `data_vi/articles.txt` | The 158 article titles |
 | `reproduce/dataset/vnhistory.json` | 166 reviewed questions (58 one-hop, 73 two-hop, 35 three-hop), MuSiQue layout; dev = first 50 (15/23/12), test = 116 (43/50/23). MD5 `b07cfa13dc9abc164da85f5b201471f5` |
+| `data_vi/gw_proxy.py` | Local OpenAI-compatible endpoint in front of the Anthropic-format gateway, so `run_colab.py` can use it unchanged |
 | `data_vi/*.py` | Pipeline scripts (below) |
 
 Questions: 178 drafts were written in three batches and reviewed by hand against criteria K1–K9; 166 were kept and 12 were rejected (ambiguous answer, a step that one passage alone answers, or a bridge name missing from the next passage). Five pairs of questions reach the same answer in the same final passage through different reasoning chains (d013/d152, d042/d166, d056/d145, d059/d167, d121/d164); both questions of each pair are kept.
@@ -61,6 +62,23 @@ Question file layout:
 - The first 50 questions are dev (15 one-hop, 23 two-hop, 12 three-hop, interleaved), the rest is test. Dev and test never share the passage that holds the final answer.
 - Supporting paragraphs come first, in step order, copied verbatim from the corpus. `--distractors N` adds N non-supporting paragraphs (most word overlap with the question); default 0.
 - Extra fields beyond the contract: `split`, `qtype` (`single` / `chain`), `draft_id`, `idx` in each paragraph, `paragraph_support_idx` in each decomposition step.
+
+## Gateway proxy for `run_colab.py`
+
+The reseller gateway (`https://1gw.gwai.cloud`, model `gemini-3.8-flash`) only accepts the Anthropic Messages format. `gw_proxy.py` serves an OpenAI chat-completions endpoint on `localhost` and forwards each call to the gateway.
+
+```bash
+pip install anthropic
+GWAI_API_KEY=... python data_vi/gw_proxy.py --port 4000 &     # on Colab, read the key from Secrets
+export OPENAI_API_KEY=local-proxy                              # run_colab.py only checks that a key is set
+python run_colab.py --dataset vnhistory --method trag --limit 50 \
+  --llm_name gemini-3.8-flash --llm_base_url http://localhost:4000/v1
+curl -s http://localhost:4000/v1/usage                         # calls, errors, tokens in/out
+```
+
+- Keys: `GWAI_API_KEY`, `GWAI_API_KEY_2`, ... from the environment only; on `429 cost_limit_exceeded` it moves to the next key and retries the same call.
+- `max_tokens` is always 32000: the model's hidden thinking uses most of the output budget.
+- Cost: USD 0.75 / 3.75 per million input / output tokens; measured cost from token counts matches the gateway dashboard within a few percent.
 
 ## Notes for the code session
 
