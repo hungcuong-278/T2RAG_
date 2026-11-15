@@ -1,22 +1,32 @@
-"""Run T2RAG, T2RAG+ (TRAG_plus), HippoRAG2 or StandardRAG on a slice of a dataset
+"""Run T2RAG, T2RAG+ (TRAG_plus), HippoRAG2, StandardRAG or NOR on a slice of a dataset
 and save the results to one JSON file.
 
 Examples (from the repo root, after patch_t2rag.py):
-    python run_colab.py --dataset musique --method trag --limit 100 --llm_name gemini-3.5-flash
-    python run_colab.py --dataset musique --method trag_plus --fixes b,s1,s3 --limit 100 --llm_name gemini-3.5-flash
-    python run_colab.py --dataset musique --method trag --start 200 --limit 200 --llm_name gemini-3.5-flash
+    python run_colab.py --dataset musique --method trag --limit 100 --llm_name gemini-3.8-flash
+    python run_colab.py --dataset musique --method trag_plus --fixes b,s1,s3 --limit 100 --llm_name gemini-3.8-flash
+    python run_colab.py --dataset vnhistory --method trag --start 50 --limit 0 --answer_format short \
+        --cache_tag r2 --tag test116_r2 --llm_name gemini-3.8-flash --llm_base_url http://localhost:4000/v1
 
 Differences from the repo's main_gemini.py (the method itself is unchanged):
   * --limit N runs only the first N questions but keeps the full corpus, so the
     OpenIE triplets shipped in outputs/<dataset>_univ are reused (no extra API cost).
   * --max_qa_steps is really passed to TRAG (main_gemini.py always uses 3).
   * --min_interval spaces out LLM calls to stay under free-tier rate limits.
-  * --start S skips the first S questions (dev = 0-99, test = 200-399).
-  * Counts LLM calls, cache hits and tokens per question (T2RAG / T2RAG+) or in total (others).
+  * --start S skips the first S questions.
+  * Counts LLM calls, cache hits and tokens per question (T2RAG / T2RAG+) or in total (others),
+    including HippoRAG's fact-reranking calls; every call's token counts are kept for T2RAG.
   * One LLM cache per dataset is shared by all methods: the cache key is the prompt text,
     so prompts that do not change between configurations are never paid for twice.
+    --cache_tag NAME uses a separate cache (outputs/<dataset>_llm_cache_NAME), so a repeated
+    run really calls the model again and run-to-run variation can be measured.
+  * --method nor answers without retrieval (same answer prompt as StandardRAG, no passages).
+  * --answer_format short asks every method for one short answer (Vietnamese rules when
+    --lang vi); the default "paper" keeps the prompts of the paper. Scored with the same EM/F1,
+    plus EM_lenient / F1_lenient (brackets and "năm"/"huyện"-style prefixes ignored, several
+    alternatives in one answer counted wrong).
   * Prints progress and saves EM, F1, retrieval recall, cost and every prediction
     to outputs/results/<run name>.json; T2RAG traces go to outputs/traces/<run name>/.
+    The summary also records the question / OpenIE file MD5s, the cache used and scores by hop.
 """
 import argparse
 import json
@@ -98,6 +108,140 @@ def em_f1(prediction, golds):
     return best_em, best_f1
 
 
+VI_PREFIXES = ("thành phố", "kinh đô", "kinh thành", "năm", "huyện", "tỉnh", "phủ", "châu", "xã", "làng",
+               "khoảng")
+MULTI_SEPARATORS = re.compile(r"\s(?:hoặc|or)\s|(?<!\d)[,;/]|[,;/](?!\d)", re.IGNORECASE)
+
+
+def _strip_brackets(text):
+    text = re.sub(r"\([^()]*\)|\[[^\[\]]*\]", " ", str(text))
+    return " ".join(text.split()).strip(" .")
+
+
+def _strip_prefix(norm_text):
+    for p in VI_PREFIXES:
+        if norm_text.startswith(p + " ") and len(norm_text) > len(p) + 1:
+            return norm_text[len(p) + 1:]
+    return norm_text
+
+
+def lenient_scores(prediction, golds, lang="en"):
+    """EM / F1 after ignoring text in brackets (both sides) and, for Vietnamese, a leading
+    "năm" / "huyện" / ... prefix. An answer that lists several alternatives ("A hoặc B", "A, B")
+    gets 0 unless a gold answer itself contains that separator.
+    Returns (em, f1, multi) where multi tells that the answer listed alternatives."""
+    pred = _strip_brackets(prediction)
+    golds = [g for g in golds if str(g).strip()]
+    multi = bool(MULTI_SEPARATORS.search(pred)) and not any(MULTI_SEPARATORS.search(str(g)) for g in golds)
+    if multi:
+        return 0.0, 0.0, True
+    p = normalize(pred)
+    g_norm = [normalize(_strip_brackets(g)) for g in golds]
+    if lang == "vi":
+        p = _strip_prefix(p)
+        g_norm = [_strip_prefix(g) for g in g_norm]
+    best_em, best_f1 = 0.0, 0.0
+    pt = p.split()
+    for g in g_norm:
+        gt = g.split()
+        best_em = max(best_em, float(pt == gt))
+        same = sum((Counter(pt) & Counter(gt)).values())
+        if same:
+            pr, rc = same / len(pt), same / len(gt)
+            best_f1 = max(best_f1, 2 * pr * rc / (pr + rc))
+    return best_em, best_f1, False
+
+
+def hops_of(qid):
+    """1hop_001 / 2hop__123 / 3hop1__... -> 1 / 2 / 3; None for other ids."""
+    if isinstance(qid, str) and "hop" in qid.split("_")[0] and qid[0].isdigit():
+        return int(qid[0])
+    return None
+
+
+def scores_by_hop(records):
+    out = {}
+    for h in sorted({r["hops"] for r in records if r.get("hops") is not None}):
+        rs = [r for r in records if r.get("hops") == h]
+        out[str(h)] = {"n": len(rs)}
+        for key in ("em", "f1", "em_lenient", "f1_lenient"):
+            vals = [r[key] for r in rs if isinstance(r.get(key), (int, float))]
+            out[str(h)][key] = round(sum(vals) / len(vals), 4) if vals else None
+    return out
+
+
+# ---------------------------------------------------------------- answer format (--answer_format short)
+PAPER_QA_SYSTEM_START = "As an advanced reading comprehension assistant"  # StandardRAG / HippoRAG / NOR
+TRAG_FINAL_START = "Based on the reasoning clues, please answer the following question."  # TRAG.final_qa
+TRAG_FORMAT_BLOCK = re.compile(r"Answer format requirements:.*?(?=\n\nAnswer:)", re.DOTALL)
+SHORT_RULES = {
+    "vi": ("Yêu cầu bắt buộc về đáp án:\n"
+           "- Đáp án viết bằng tiếng Việt, chỉ gồm MỘT tên người, địa danh, triều đại, con số hoặc cụm từ ngắn.\n"
+           "- Không giải thích, không ghi chú trong ngoặc, không nêu nhiều phương án, không lặp lại câu hỏi.\n"
+           "- Hỏi năm thì chỉ ghi số năm (ví dụ: 1288). Hỏi người thì ghi tên như trong tài liệu.\n"
+           "- Câu hỏi có/không thì chỉ ghi: có hoặc không.\n"
+           "- Nếu tài liệu không đủ thông tin thì ghi đúng hai chữ: Không rõ"),
+    "en": ("Answer requirements:\n"
+           "- Give ONE entity, date, number or short phrase only.\n"
+           "- No explanation, no text in brackets, no list of alternatives, do not repeat the question.\n"
+           "- For a year, write only the year (e.g. 1288). For a yes/no question, write only yes or no.\n"
+           "- If the information is not available, write exactly: Unknown"),
+}
+
+
+def format_messages(messages, lang):
+    """Rewrite the final answer prompts of the three methods; every other prompt is unchanged."""
+    rules = SHORT_RULES.get(lang, SHORT_RULES["en"])
+    out = [dict(m) for m in messages]
+    changed = False
+    for m in out:
+        content = m.get("content")
+        if not isinstance(content, str):
+            continue
+        if m.get("role") == "system" and content.startswith(PAPER_QA_SYSTEM_START):
+            m["content"] = content + "\n\nAfter \"Answer: \" write only the final answer.\n" + rules
+            changed = True
+        elif m.get("role") == "user" and content.startswith(TRAG_FINAL_START):
+            if TRAG_FORMAT_BLOCK.search(content):
+                m["content"] = TRAG_FORMAT_BLOCK.sub(lambda _m: rules, content, count=1)
+            else:
+                m["content"] = content.replace("\nAnswer:", "\n" + rules + "\n\nAnswer:", 1)
+            changed = True
+    return out if changed else messages
+
+
+def install_answer_format(llm_model, lang):
+    original = llm_model.infer
+
+    def formatted_infer(messages, *args, **kwargs):
+        return original(format_messages(messages, lang), *args, **kwargs)
+
+    llm_model.infer = formatted_infer
+
+
+def make_llm(config):
+    from src.llm import _get_llm_class
+    return _get_llm_class(config)
+
+
+def run_nor(config, queries, llm_model):
+    """NOR baseline: StandardRAG's answer prompt (same template, same 'Answer:' parsing),
+    but no passage is given, so the model answers from what it already knows."""
+    from src.prompts.prompt_template_manager import PromptTemplateManager
+    ptm = PromptTemplateManager(role_mapping={"system": "system", "user": "user", "assistant": "assistant"})
+    name = f"rag_qa_{config.dataset}"
+    if not ptm.is_template_name_valid(name=name):
+        name = "rag_qa_musique"
+    solutions = []
+    for q in queries:
+        messages = ptm.render(name=name, prompt_user="Question: " + q + "\nThought: ")
+        response = llm_model.infer(messages)
+        text = response[0] if isinstance(response, tuple) else response
+        answer = str(text).split("Answer:")[-1].strip()
+        solutions.append(types.SimpleNamespace(question=q, answer=answer, docs=[]))
+    return solutions
+
+
 def install_rate_limiter(min_interval):
     """Leave at least `min_interval` seconds between real (uncached) LLM calls."""
     if min_interval <= 0:
@@ -118,11 +262,15 @@ def install_rate_limiter(min_interval):
 
 
 class LLMCounter:
-    """Wraps llm_model.infer to count calls, cache hits and tokens."""
+    """Wraps llm_model.infer to count calls, cache hits and tokens, and keeps every call's
+    [prompt_tokens, completion_tokens, cache_hit]. A call whose output is longer than
+    `warn_tokens` is reported at once (the model may be stuck in a long hidden reasoning)."""
 
-    def __init__(self, llm_model):
+    def __init__(self, llm_model, warn_tokens=20000):
         self.reset()
         self.total = {"llm_calls": 0, "cache_hits": 0, "prompt_tokens": 0, "completion_tokens": 0}
+        self.max_completion_tokens = 0
+        self.long_calls = 0
         original = llm_model.infer
         counter = self
 
@@ -136,15 +284,24 @@ class LLMCounter:
             for k, v in add.items():
                 counter.current[k] += v
                 counter.total[k] += v
+            counter.calls.append([add["prompt_tokens"], add["completion_tokens"], hit])
+            counter.max_completion_tokens = max(counter.max_completion_tokens, add["completion_tokens"])
+            if warn_tokens and add["completion_tokens"] > warn_tokens:
+                counter.long_calls += 1
+                print(f"WARNING: one LLM call returned {add['completion_tokens']} output tokens "
+                      f"(> {warn_tokens}); check the cost of this run.", flush=True)
             return result
 
         llm_model.infer = counted_infer
 
     def reset(self):
         self.current = {"llm_calls": 0, "cache_hits": 0, "prompt_tokens": 0, "completion_tokens": 0}
+        self.calls = []
 
     def snapshot(self):
-        return dict(self.current)
+        out = dict(self.current)
+        out["calls"] = [list(c) for c in self.calls]
+        return out
 
 
 def file_md5(path):
@@ -173,7 +330,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", default="hotpotqa",
                     help="popqa, 2wikimultihopqa, musique, hotpotqa, story, medical, sample")
-    ap.add_argument("--method", default="trag", choices=["trag", "trag_plus", "standard", "hippo"])
+    ap.add_argument("--method", default="trag", choices=["trag", "trag_plus", "standard", "hippo", "nor"])
     ap.add_argument("--fixes", default="b,s1,s2,s3,s4",
                     help="trag_plus only: comma list of b,s1,s2,s3,s4,h2a (empty = same as trag)")
     ap.add_argument("--start", type=int, default=0, help="Skip the first N questions")
@@ -193,6 +350,14 @@ def main():
     ap.add_argument("--verbose", action="store_true", help="Show the repo's detailed logs")
     ap.add_argument("--lang", default="auto", choices=["auto", "en", "vi"],
                     help="Answer normalisation and HippoRAG entity keys; auto = vi for vnhistory* datasets")
+    ap.add_argument("--answer_format", default="paper", choices=["paper", "short"],
+                    help="paper = the paper's answer prompts; short = ask for one short answer "
+                         "(Vietnamese rules with --lang vi). Use a different --tag for each format.")
+    ap.add_argument("--cache_tag", default="",
+                    help="Use a separate LLM cache outputs/<dataset>_llm_cache_<tag> (e.g. r2 for a second "
+                         "run that must really call the model again); empty = the shared cache")
+    ap.add_argument("--warn_tokens", type=int, default=20000,
+                    help="Print a warning when one LLM call returns more output tokens than this")
     ap.add_argument("--allow_openie_extraction", action="store_true",
                     help="hippo only: allow HippoRAG to extract missing triplets with the LLM and rewrite "
                          "the OpenIE file (off by default: the run stops instead)")
@@ -206,7 +371,10 @@ def main():
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     if not (os.getenv("GOOGLE_API_KEY") or os.getenv("OPENAI_API_KEY")):
-        raise SystemExit("Set GOOGLE_API_KEY (Gemini) or OPENAI_API_KEY first.")
+        raise SystemExit("Set GOOGLE_API_KEY (Gemini) or OPENAI_API_KEY first "
+                         "(with gw_proxy any value works: the proxy adds the real key).")
+    if args.cache_tag and not re.fullmatch(r"[A-Za-z0-9_.-]+", args.cache_tag):
+        raise SystemExit("--cache_tag may only contain letters, digits, '_', '-' and '.'")
 
     from src.utils.config_utils import BaseConfig
     from src.evaluation.qa_eval import calculate_overall_qa_metrics
@@ -216,7 +384,8 @@ def main():
 
     dataset = args.dataset
     corpus = json.load(open(f"reproduce/dataset/{dataset}_corpus.json", encoding="utf-8"))
-    samples = json.load(open(f"reproduce/dataset/{dataset}.json", encoding="utf-8"))
+    questions_path = f"reproduce/dataset/{dataset}.json"
+    samples = json.load(open(questions_path, encoding="utf-8"))
     samples = samples[args.start:]
     if args.limit and args.limit > 0:
         samples = samples[:args.limit]
@@ -243,6 +412,22 @@ def main():
     reusable_dir = f"outputs/{dataset}_univ"
     method_dir = f"outputs/{dataset}_{args.method}"
     has_openie = os.path.exists(os.path.join(reusable_dir, "openie_results_ner.json"))
+    shared_cache = os.path.join("outputs", f"{dataset}_llm_cache" + (f"_{args.cache_tag}" if args.cache_tag else ""))
+
+    # Never overwrite the result of a different configuration that happens to have the same name.
+    out_path = os.path.join("outputs/results", run_name + ".json")
+    if os.path.exists(out_path):
+        try:
+            old = json.load(open(out_path, encoding="utf-8")).get("summary", {})
+        except Exception:
+            old = {}
+        mine = {"answer_format": args.answer_format, "embedding": args.embedding_name, "llm_cache": shared_cache}
+        theirs = {"answer_format": old.get("answer_format", "paper"), "embedding": old.get("embedding"),
+                  "llm_cache": old.get("llm_cache", os.path.join("outputs", f"{dataset}_llm_cache"))}
+        diff = [k for k in mine if theirs[k] is not None and theirs[k] != mine[k]]
+        if diff:
+            raise SystemExit(f"STOP: {out_path} already holds a run with a different {', '.join(diff)} "
+                             f"({', '.join(f'{k}={theirs[k]}' for k in diff)}). Add a different --tag.")
     if args.method in ("trag", "trag_plus") and not has_openie:
         raise SystemExit(f"No triplets at {reusable_dir}/openie_results_ner.json. "
                          "T2RAG only reads existing OpenIE results; build them first.")
@@ -274,13 +459,13 @@ def main():
     config.save_dir = method_dir
     config.exclude_llm_from_paths = True
     config.embedding_base_dir = reusable_dir
-    shared_cache = os.path.join("outputs", f"{dataset}_llm_cache")
     os.makedirs(shared_cache, exist_ok=True)
 
     t0 = time.time()
     print(f"Dataset {dataset}: {len(queries)} questions, {len(docs)} passages in the corpus")
     print(f"Method {method_label} | LLM {args.llm_name} | embedding {args.embedding_name} | lang {lang} | "
-          f"questions {args.start}..{args.start + len(queries) - 1}")
+          f"questions {args.start}..{args.start + len(queries) - 1} | answers {args.answer_format} | "
+          f"cache {shared_cache}")
     print("Loading models and embeddings (the first run embeds the whole corpus and all triplets; "
           "later runs read them from the cache)...")
 
@@ -298,6 +483,8 @@ def main():
         rag.intermediate_results_dir = os.path.join("outputs", "traces", run_name)
         shutil.rmtree(rag.intermediate_results_dir, ignore_errors=True)
         os.makedirs(rag.intermediate_results_dir, exist_ok=True)
+    elif args.method == "nor":
+        rag = types.SimpleNamespace(llm_model=make_llm(config))
     elif args.method == "hippo":
         # HippoRAG2 (graph + Personalized PageRank) builds its graph from the same OpenIE triplets.
         from src.HippoRAG import HippoRAG
@@ -325,7 +512,13 @@ def main():
     if hasattr(rag, "llm_model") and hasattr(rag.llm_model, "cache_file_name"):
         rag.llm_model.cache_file_name = os.path.join(
             shared_cache, os.path.basename(rag.llm_model.cache_file_name))
-    counter = LLMCounter(rag.llm_model) if hasattr(rag, "llm_model") else None
+    if args.answer_format == "short" and hasattr(rag, "llm_model"):
+        install_answer_format(rag.llm_model, lang)
+    counter = LLMCounter(rag.llm_model, warn_tokens=args.warn_tokens) if hasattr(rag, "llm_model") else None
+    # HippoRAG's fact reranker keeps its own reference to llm_model.infer (src/rerank.py: DSPyFilter
+    # stores llm_infer_fn at construction), so it would bypass the counter: point it at the wrapper.
+    if counter and getattr(getattr(rag, "rerank_filter", None), "llm_infer_fn", None) is not None:
+        rag.rerank_filter.llm_infer_fn = rag.llm_model.infer
 
     if args.method in ("trag", "trag_plus"):
         original_qa = rag.trag_qa  # bound method of the instance's class
@@ -355,7 +548,8 @@ def main():
 
         rag.trag_qa = types.MethodType(trag_qa_with_stats, rag)
 
-    rag.index(docs)
+    if args.method != "nor":
+        rag.index(docs)
     if args.method == "hippo" and openie_md5:
         now = file_md5(openie_path)
         if now != openie_md5:
@@ -365,8 +559,11 @@ def main():
         else:
             print(f"OpenIE file unchanged after indexing (md5 {now[:8]}).")
     print(f"Index ready after {time.time() - t0:.0f}s. Answering...")
-    result = rag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=gold_answers)
-    solutions = result[0]
+    if args.method == "nor":
+        solutions = run_nor(config, queries, rag.llm_model)
+    else:
+        result = rag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=gold_answers)
+        solutions = result[0]
 
     predictions = [s.answer for s in solutions]
     overall = calculate_overall_qa_metrics(gold_answers=[list(g) for g in gold_answers],
@@ -374,10 +571,11 @@ def main():
     records, recall_hits, recall5_hits, n_gold, n_docs = [], 0, 0, 0, []
     for i, sol in enumerate(solutions):
         em, f1 = em_f1(sol.answer, gold_answers[i])
+        em_l, f1_l, multi = lenient_scores(sol.answer, gold_answers[i], lang)
         retrieved = list(sol.docs or [])
         n_docs.append(len(retrieved))
         found = found5 = None
-        if gold_docs is not None:
+        if gold_docs is not None and args.method != "nor":
             golds = gold_docs[i]
             found = sum(g in retrieved for g in golds)
             found5 = sum(g in retrieved[:5] for g in golds)
@@ -385,30 +583,39 @@ def main():
             recall5_hits += found5
             n_gold += len(golds)
         qid = samples[i].get("id", samples[i].get("_id", str(i)))
-        hops = None
-        if isinstance(qid, str) and "hop" in qid.split("_")[0]:
-            hops = int(qid.split("_")[0][0])  # MuSiQue ids start with 2hop / 3hop1 / 4hop2 ...
+        hops = hops_of(qid)  # MuSiQue: 2hop / 3hop1 / 4hop2 ...; vnhistory: 1hop_ / 2hop_ / 3hop_
         rec = {"id": args.start + i, "qid": qid, "hops": hops, "question": sol.question,
                "prediction": sol.answer, "gold_answers": sorted(gold_answers[i]), "em": em,
-               "f1": round(f1, 4), "num_retrieved_docs": len(retrieved), "gold_docs_found": found,
+               "f1": round(f1, 4), "em_lenient": em_l, "f1_lenient": round(f1_l, 4),
+               "multi_answer": multi, "long_answer": len(str(sol.answer).split()) > 8,
+               "num_retrieved_docs": len(retrieved), "gold_docs_found": found,
                "gold_docs_found_first5": found5,
-               "gold_docs_total": len(gold_docs[i]) if gold_docs else None}
+               "gold_docs_total": len(gold_docs[i]) if gold_docs and args.method != "nor" else None}
         if i < len(per_question):
             rec.update(per_question[i])
         records.append(rec)
 
     errors = sum(p == "Error processing query" for p in predictions)
 
-    def avg(key):
+    def avg(key, digits=None):
         vals = [r[key] for r in records if isinstance(r.get(key), (int, float)) and not isinstance(r.get(key), bool)]
-        return round(float(np.mean(vals)), 2) if vals else None
+        if not vals:
+            return None
+        return round(float(np.mean(vals)), digits if digits is not None else (4 if key.endswith("lenient") else 2))
 
     summary = {
         "run_name": run_name, "dataset": dataset, "method": method_label, "base_method": args.method,
         "fixes": fixes, "tag": args.tag, "lang": lang, "llm": args.llm_name, "start": args.start,
         "embedding": args.embedding_name, "num_questions": len(queries),
         "qa_top_k": args.qa_top_k, "max_qa_steps": args.max_qa_steps,
+        "answer_format": args.answer_format, "llm_cache": shared_cache,
+        "questions_md5": file_md5(questions_path),
+        "openie_md5": file_md5(os.path.join(reusable_dir, "openie_results_ner.json")) if has_openie else None,
         "ExactMatch": overall["ExactMatch"], "F1": overall["F1"],
+        "EM_lenient": avg("em_lenient"), "F1_lenient": avg("f1_lenient"),
+        "n_long_answers": sum(bool(r["long_answer"]) for r in records),
+        "n_multi_answers": sum(bool(r["multi_answer"]) for r in records),
+        "by_hops": scores_by_hop(records),
         "recall_first5_docs": round(recall5_hits / n_gold, 4) if n_gold else None,
         "recall_all_retrieved_docs": round(recall_hits / n_gold, 4) if n_gold else None,
         "avg_retrieved_docs": round(float(np.mean(n_docs)), 2) if n_docs else 0,
@@ -419,6 +626,8 @@ def main():
         "pct_all_resolved": (round(100 * float(np.mean([bool(r.get("all_resolved")) for r in records])), 1)
                              if per_question else None),
         "total_llm": counter.total if counter else None,
+        "max_completion_tokens": counter.max_completion_tokens if counter else None,
+        "n_long_calls": counter.long_calls if counter else None,
         "trace_dir": getattr(rag, "intermediate_results_dir", None),
         "settings": {"s1_max_steps": args.s1_max_steps, "s2_min_per_clue": args.s2_min_per_clue,
                      "s4_threshold": args.s4_threshold} if args.method == "trag_plus" else None,
@@ -430,17 +639,18 @@ def main():
         summary["avg_completion_tokens"] = round(counter.total["completion_tokens"] / len(queries), 1)
 
     os.makedirs("outputs/results", exist_ok=True)
-    out_path = os.path.join("outputs/results", run_name + ".json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({"summary": summary, "records": records}, f, ensure_ascii=False, indent=2)
 
     print("\n=== Results ===")
     for k, v in summary.items():
-        if k not in ("settings", "total_llm"):
+        if k not in ("settings", "total_llm", "by_hops"):
             print(f"{k:28s} {v}")
     if errors:
         print(f"\nWARNING: {errors} questions failed (often rate limits). Run the same command again: "
               "answers already received are cached, so only the failed ones call the API.")
+    for h, v in summary["by_hops"].items():
+        print(f"  {h}-hop ({v['n']:3d} q)   EM {v['em']}   F1 {v['f1']}   EM_lenient {v['em_lenient']}")
     print(f"\nSaved to {out_path}")
 
 

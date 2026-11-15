@@ -4,7 +4,7 @@ Example (from the repo root):
     python make_table.py --glob "outputs/results/musique_*_from200_200q.json" --baseline trag
     python make_table.py outputs/results/a.json outputs/results/b.json --labels labels.json
 
-Each cell is "EM / F1" (x100). A dagger (†) means the method beats the baseline on that
+Each cell is "EM / F1" (x100); with --metric lenient it is "EM_lenient / F1_lenient" (run_colab.py v6). A dagger (†) means the method beats the baseline on that
 metric with p < 0.05 under a paired bootstrap test over the questions both runs answered
 (5,000 resamples by default, the same test the T2RAG paper uses). The best value of each
 column is in bold.
@@ -90,7 +90,19 @@ def main(argv=None):
     ap.add_argument("--alpha", type=float, default=0.05)
     ap.add_argument("--decimal", default=",", help="Decimal separator in the tables (default ',')")
     ap.add_argument("--no_groups", action="store_true", help="Only the overall column per dataset")
+    ap.add_argument("--metric", default="strict", choices=["strict", "lenient"],
+                    help="strict = EM / F1 as in the paper; lenient = EM_lenient / F1_lenient (v6 result files)")
     args = ap.parse_args(argv)
+    em_key, f1_key = ("em", "f1") if args.metric == "strict" else ("em_lenient", "f1_lenient")
+
+    def score(r, key):
+        v = r.get(key)
+        if v is None:
+            if args.metric == "lenient":
+                raise SystemExit("--metric lenient needs result files from run_colab.py v6 (or rescore.py), "
+                                 f"but question {r.get('qid')} has no {key}.")
+            return 0.0
+        return float(v)
 
     paths = list(args.files)
     for pattern in args.glob:
@@ -133,17 +145,17 @@ def main(argv=None):
             recs = {q: r for q, r in run["records"].items() if g is None or group_of(r) == g}
             if not recs:
                 continue
-            em = 100 * np.mean([r["em"] for r in recs.values()])
-            f1 = 100 * np.mean([r["f1"] for r in recs.values()])
+            em = 100 * np.mean([score(r, em_key) for r in recs.values()])
+            f1 = 100 * np.mean([score(r, f1_key) for r in recs.values()])
             cell = {"em": em, "f1": f1, "n": len(recs), "p_em": None, "p_f1": None}
             base = runs.get((d, args.baseline))
             if base is not None and m != args.baseline:
                 common = [q for q in recs if q in base["records"]]
                 if common:
-                    a_em = [recs[q]["em"] for q in common]
-                    b_em = [base["records"][q]["em"] for q in common]
-                    a_f1 = [recs[q]["f1"] for q in common]
-                    b_f1 = [base["records"][q]["f1"] for q in common]
+                    a_em = [score(recs[q], em_key) for q in common]
+                    b_em = [score(base["records"][q], em_key) for q in common]
+                    a_f1 = [score(recs[q], f1_key) for q in common]
+                    b_f1 = [score(base["records"][q], f1_key) for q in common]
                     cell["p_em"] = paired_bootstrap_p(a_em, b_em, args.n_boot)
                     cell["p_f1"] = paired_bootstrap_p(a_f1, b_f1, args.n_boot)
                     cell["n_common"] = len(common)
@@ -194,7 +206,7 @@ def main(argv=None):
     n_line = "Số câu: " + "; ".join(
         f"{d} {'tổng' if g is None else g} = {max((cells[(m, d, g)]['n'] for m in methods if (m, d, g) in cells), default=0)}"
         for d, g in columns)
-    note = (f"\nÔ = EM / F1 (×100). **Đậm** = tốt nhất cột. † = hơn `{labels.get(args.baseline, args.baseline)}` "
+    note = (f"\nÔ = {'EM / F1' if args.metric == 'strict' else 'EM_lenient / F1_lenient'} (×100). **Đậm** = tốt nhất cột. † = hơn `{labels.get(args.baseline, args.baseline)}` "
             f"có ý nghĩa (bootstrap ghép cặp {args.n_boot} lần, p < {args.alpha}). {n_line}.\n")
     main_md = "\n".join(lines) + "\n" + note
     with open(os.path.join(args.out_dir, "table_main.md"), "w", encoding="utf-8") as f:

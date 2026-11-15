@@ -15,25 +15,24 @@ Repo này chứa **code nhóm viết thêm** trên nền phương pháp T²RAG:
 | File / thư mục | Nội dung |
 |---|---|
 | `src/TRAG_plus.py` | T²RAG cải tiến (lớp con của `TRAG`, không sửa code gốc). Bật từng phần bằng `--fixes`: `b` (sửa lỗi code gốc L2, L4, L5, L6), `s1` (giữ bộ ba chưa giải + bảng biến), `s2` (tìm kiếm lai BM25 + vector), `s3` (trả lời có bằng chứng), `s4` (kiểm chứng giá trị) |
-| `run_colab.py` | Chạy một phương pháp (`trag`, `trag_plus`, `hippo`, `standard`) trên một phần bộ dữ liệu; lưu EM/F1/Recall, số lần gọi LLM, vết suy luận |
+| `run_colab.py` | Chạy một phương pháp (`trag`, `trag_plus`, `hippo`, `standard`, `nor` = không truy hồi) trên một phần bộ dữ liệu; lưu EM/F1, EM/F1 nới (`EM_lenient`), Recall@5, điểm theo số bước, số lần gọi LLM và token từng lượt gọi, MD5 dữ liệu, vết suy luận. `--answer_format short`: yêu cầu đáp án ngắn (tiếng Việt khi `--lang vi`); `--cache_tag`: cache LLM riêng cho từng lượt chạy |
+| `merge_results.py` | Gộp các lô của cùng một cấu hình (`--start` / `--limit`) thành một file kết quả |
+| `rescore.py` | Chấm lại kết quả đã có theo file câu hỏi mới (ví dụ `vnhistory.json` bản 1.1), không gọi model |
 | `compare_methods.py` | So sánh hai lượt chạy theo từng câu và theo số bước |
-| `make_table.py` | Bảng kết quả kiểu Table 1 của bài báo (EM / F1 theo số bước, kiểm định bootstrap) và bảng chi phí |
+| `make_table.py` | Bảng kết quả kiểu Table 1 của bài báo (EM / F1 theo số bước, kiểm định bootstrap) và bảng chi phí; `--metric lenient` cho EM/F1 nới |
 | `error_analysis.py` | Gán nhãn lỗi tự động cho câu sai từ vết suy luận; so sánh trước / sau |
 | `check_vnhistory.py` | Kiểm tra định dạng bộ dữ liệu lịch sử trước khi chạy |
 | `patch_t2rag.py` | Vá code gốc để chạy trên Google Colab (không đổi phương pháp) |
-| `tests/` | 29 bài test dùng LLM giả (không tốn API) |
-| `notebooks/T2RAG_Colab_v2.ipynb` | Notebook Colab chạy toàn bộ thí nghiệm (sinh bởi `build_notebook_v2.py`) |
+| `tests/` | 53 bài test dùng LLM giả (không tốn API) |
+| `notebooks/T2RAG_Colab_v6.ipynb` | Notebook Colab chạy toàn bộ thí nghiệm (sinh bởi `build_notebook_v6.py`): lấy code bằng `git clone`, gọi LLM qua `data_vi/gw_proxy.py` hoặc thẳng Google, chạy theo lô. Bản cũ: `T2RAG_Colab_v2.ipynb` |
 | `docs/` | Hướng dẫn chạy và kế hoạch thí nghiệm |
 | `data_vi/`, `reproduce/dataset/vnhistory_corpus.json` | Bộ dữ liệu lịch sử Việt Nam: kho 896 đoạn, bộ ba OpenIE, script dựng dữ liệu (xem `data_vi/README.md`) |
 
 ## Chạy trên Google Colab
 
-Xem chi tiết trong `docs/HUONG_DAN_CHAY_COLAB_v4.md`. Tóm tắt:
-
-1. Nén các file code của repo này thành `t2rag_code_v4.zip` (hoặc lấy bản zip của nhóm) và tải lên Google Drive vào `MyDrive/T2RAG_code/`.
-2. Mở `notebooks/T2RAG_Colab_v2.ipynb` trên Colab, chọn GPU T4.
-3. Thêm secret `GOOGLE_API_KEY` (key Gemini của bạn) và bật *Notebook access*. **Không ghi API key vào code.**
-4. Chạy Phần 0 (cài đặt; ô kiểm tra phải in `OK`), rồi các phần sau theo kế hoạch.
+1. Mở `notebooks/T2RAG_Colab_v6.ipynb` trên Colab, chọn GPU T4. Không cần tải zip lên Drive: ô cài đặt tự `git clone` repo này.
+2. Thêm secret `GWAI_API_KEY` (gateway; có thể thêm `GWAI_API_KEY_2`…) hoặc `GOOGLE_API_KEY`, bật *Notebook access*. **Không ghi API key vào code.**
+3. Chạy Phần 0 (cài đặt; ô kiểm tra phải in `OK`; bật gateway; chọn model `gemini-3.8-flash`), rồi các phần sau theo kế hoạch.
 
 Kiểm tra code trên máy (cần bản code gốc đã vá và các thư viện của nó):
 
@@ -46,5 +45,6 @@ python -m unittest discover tests
 
 ## Trạng thái
 
-- Code đã qua 29/29 test bằng LLM giả; chưa có kết quả chạy với Gemini thật.
-- Đang làm: GĐ1 (so sánh T²RAG với HippoRAG2 trên MuSiQue) và ablation S1–S4.
+- Code v6 qua 53/53 test bằng LLM giả.
+- Đã có: Standard RAG, HippoRAG2, T²RAG gốc trên `vnhistory` (dev 50 và test 116 câu, 2 lượt, `gemini-3.8-flash`).
+- Đang làm: GĐ1 (T²RAG so với HippoRAG2 trên MuSiQue), bộ tiếng Anh, ablation T²RAG+ trên `vnhistory`.

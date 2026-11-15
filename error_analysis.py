@@ -178,7 +178,8 @@ def label_run(result_path, dataset_path, trace_dir, alias_groups, f1_threshold):
     trace_dir = trace_dir or s.get("trace_dir") or ""
     rows, n_trace = [], 0
     for r in data["records"]:
-        trace = load_trace(trace_dir, r) if trace_dir and os.path.isdir(trace_dir) else None
+        tdir = r.get("trace_dir") if r.get("trace_dir") and os.path.isdir(r["trace_dir"]) else trace_dir
+        trace = load_trace(tdir, r) if tdir and os.path.isdir(tdir) else None  # merged runs: one folder per batch
         n_trace += trace is not None
         rows.append(analyse(r, trace, gold.get(str(r.get("qid"))), alias_groups, f1_threshold))
     return s, rows, n_trace, trace_dir

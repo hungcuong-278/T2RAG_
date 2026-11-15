@@ -19,11 +19,19 @@ Flags
   s4  each resolved value must come with a quoted evidence sentence that is checked against the
       passages; unsupported values are not locked and are searched again (best with s1)
   h2a reserved for the graph fallback (Huong 2), not implemented yet
+
+Vietnamese (T2RAG_LANG=vi, set by run_colab.py --lang vi / vnhistory datasets): with b, Vietnamese
+question words are removed too; BM25 (s2) also indexes pairs of adjacent syllables, since a
+Vietnamese word is often two syllables ("Trần Hưng Đạo" -> trần, hưng, đạo, trần_hưng, hưng_đạo);
+s1 / s4 prompts ask to copy Vietnamese names exactly as written. Text is NFC-normalised before
+any token comparison.
 """
 import contextlib
 import logging
 import math
+import os
 import re
+import unicodedata
 from collections import Counter, defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -37,7 +45,14 @@ FIELDS = ("subject", "predicate", "object")
 # A placeholder is "?" or "?Name" standing as its own token (not the "?" ending a real title).
 PLACEHOLDER_TOKEN = re.compile(r"(?<![\w?])\?[A-Za-z0-9_]*(?![\w?])")
 QUESTION_WORDS = re.compile(r"\b(what|who|whom|whose|where|when|why|how|which)\b", re.IGNORECASE)
+# Vietnamese question words, removed only as whole words (longest first: "khi nào" before "nào").
+QUESTION_WORDS_VI = re.compile(r"(?<!\w)(bao giờ|khi nào|bao nhiêu|bao lâu|vì sao|tại sao|là gì|"
+                               r"ai|gì|nào|đâu|mấy)(?!\w)", re.IGNORECASE)
 WORD = re.compile(r"\w+", re.UNICODE)
+
+
+def is_vietnamese() -> bool:
+    return os.environ.get("T2RAG_LANG", "en").lower() == "vi"
 
 
 # --------------------------------------------------------------------------- small helpers
@@ -76,7 +91,15 @@ def clean(clue: Dict[str, str]) -> Dict[str, str]:
 
 
 def tokens(text: str) -> List[str]:
-    return WORD.findall((text or "").lower())
+    return WORD.findall(unicodedata.normalize("NFC", text or "").lower())
+
+
+def bm25_tokens(text: str, syllable_pairs: bool = False) -> List[str]:
+    """BM25 terms: words (syllables for Vietnamese), plus adjacent pairs when syllable_pairs."""
+    t = tokens(text)
+    if syllable_pairs and len(t) > 1:
+        return t + [f"{a}_{b}" for a, b in zip(t, t[1:])]
+    return t
 
 
 def norm_text(text: str) -> str:
@@ -85,12 +108,13 @@ def norm_text(text: str) -> str:
 
 # --------------------------------------------------------------------------- BM25 (no extra package)
 class BM25:
-    def __init__(self, docs: List[str], k1: float = 1.5, b: float = 0.75):
+    def __init__(self, docs: List[str], k1: float = 1.5, b: float = 0.75, syllable_pairs: bool = False):
         self.k1, self.b = k1, b
+        self.syllable_pairs = syllable_pairs
         self.doc_len = np.zeros(len(docs), dtype=np.float32)
         self.postings: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
         for i, d in enumerate(docs):
-            tf = Counter(tokens(d))
+            tf = Counter(bm25_tokens(d, self.syllable_pairs))
             self.doc_len[i] = sum(tf.values())
             for t, c in tf.items():
                 self.postings[t].append((i, c))
@@ -100,7 +124,7 @@ class BM25:
 
     def scores(self, query: str) -> np.ndarray:
         s = np.zeros(self.n, dtype=np.float32)
-        for t in set(tokens(query)):
+        for t in set(bm25_tokens(query, self.syllable_pairs)):
             if t not in self.postings:
                 continue
             idf = self.idf[t]
@@ -137,6 +161,10 @@ S1_RESOLVE_NOTE = """
         - Keep the placeholder names (?A, ?B, ...). Never rename them.
         - After each Fully Resolved Clue and each Newly Traceable Clue, add one line listing the placeholders you filled, e.g.
           Binding: ?A = Ermengarde of Tours
+"""
+
+VI_NAMES_NOTE = """
+        Language rule: the passages are in Vietnamese. Write every entity, place, title and date exactly as it appears in the passages (Vietnamese, with diacritics); do not translate names into English.
 """
 
 S4_RESOLVE_NOTE = """
@@ -272,6 +300,12 @@ class TRAGPlus(TRAG):
             for old, new in S1_DECOMPOSE_REPLACEMENTS:
                 if old in text:
                     text = text.replace(old, new)
+            if is_vietnamese() and VI_NAMES_NOTE.strip() not in text:
+                anchor = "\nProvide your response in this format:"
+                if anchor in text:
+                    text = text.replace(anchor, VI_NAMES_NOTE.rstrip() + "\n" + anchor, 1)
+                else:
+                    text = text.rstrip() + "\n" + VI_NAMES_NOTE
             return text
 
         with self._rewrite_prompt(rewrite):
@@ -290,8 +324,10 @@ class TRAGPlus(TRAG):
             if text:
                 clue_queries.append(text)
         if self.on("b"):
-            q = QUESTION_WORDS.sub(" ", query).replace("?", " ")
-            q = " ".join(q.split())
+            q = QUESTION_WORDS.sub(" ", unicodedata.normalize("NFC", query))
+            if is_vietnamese():
+                q = QUESTION_WORDS_VI.sub(" ", q)
+            q = " ".join(q.replace("?", " ").split())
         else:  # the original behaviour (TRAG.py 478-484)
             q = query
             for w in ["what", "who", "where", "when", "why", "how", "which", "whose"]:
@@ -357,7 +393,8 @@ class TRAGPlus(TRAG):
             if self.prop_passage_ids is None:
                 self._build_proposition_sources()
             self._bm25_ids = list(self.passage_text_by_id.keys())
-            self._bm25 = BM25([self.passage_text_by_id[i] for i in self._bm25_ids])
+            self._bm25 = BM25([self.passage_text_by_id[i] for i in self._bm25_ids],
+                              syllable_pairs=is_vietnamese())
         scores = self._bm25.scores(text)
         top = np.argsort(scores)[::-1][:depth]
         return [self._bm25_ids[i] for i in top if scores[i] > 0]
@@ -548,6 +585,8 @@ Object: {c['object']}
         if self.on("s4"):
             example_extra += '\n        Evidence: "Lothair II was the son of Emperor Lothair I and Ermengarde of Tours."'
         notes = (S1_RESOLVE_NOTE if self.on("s1") else "") + (S4_RESOLVE_NOTE if self.on("s4") else "")
+        if is_vietnamese():
+            notes += VI_NAMES_NOTE
         return f"""Example:
         Context Propositions:
         {context_propositions[:1000]}
