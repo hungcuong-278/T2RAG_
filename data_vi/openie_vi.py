@@ -86,11 +86,13 @@ def load_corpus():
 
 
 THINKING_BODY = {"default": {}, "off": {"thinking": {"type": "disabled"}}, "low": {"output_config": {"effort": "low"}}}
-RUN = {"model": None, "thinking": "default"}   # set from the command line; selects the cache folder
+RUN = {"model": None, "thinking": "default", "cache_tag": ""}   # set from the command line; selects the cache folder
 
 
 def cache_dir():
     tag = RUN["model"] + ("" if RUN["thinking"] == "default" else f"__thinking-{RUN['thinking']}")
+    if RUN.get("cache_tag"):
+        tag += f"__{RUN['cache_tag']}"
     return os.path.join(CACHE_ROOT, prompts_vi.PROMPT_VERSION, tag)
 
 
@@ -149,7 +151,8 @@ def ungrounded(triples, passage):
 # ---------------------------------------------------------------- LLM calls
 
 SPEND_PATH = os.path.join(CACHE_ROOT, "key_spend.json")
-EXHAUSTED_HINTS = ("insufficient", "quota", "credit", "balance", "limit exceeded", "cost limit", "exceeded",
+ERROR_LOG = os.path.join("data_vi", "work", "logs", "gateway_errors.log")
+EXHAUSTED_HINTS = ("cost_limit_exceeded", "insufficient", "quota", "credit", "balance", "limit exceeded", "cost limit", "exceeded",
                    "payment", "expired", "billing")
 
 
@@ -181,6 +184,11 @@ class KeyRing:
         keys = read_keys(args.api_key_env)
         if not keys:
             keys = [get_key(args.api_key_env)]
+        only = getattr(args, "only_key", None)
+        if only:
+            keys = [k for k in keys if k.endswith(only)]
+            if not keys:
+                raise SystemExit(f"No key in .env ends with {only!r}")
         self.keys, self.args, self.i = keys, args, 0
         self.lock = threading.Lock()
         self.spend = json.load(open(SPEND_PATH, encoding="utf-8")) if os.path.exists(SPEND_PATH) else {}
@@ -190,6 +198,8 @@ class KeyRing:
         self._select(start=0)
 
     def _usable(self, k):
+        if getattr(self.args, "drain", False):
+            return fingerprint(k) not in self.dead
         return fingerprint(k) not in self.dead and self.spend.get(fingerprint(k), 0) < self.args.key_budget
 
     def _select(self, start):
@@ -221,7 +231,7 @@ class KeyRing:
             os.makedirs(CACHE_ROOT, exist_ok=True)
             with open(SPEND_PATH, "w", encoding="utf-8") as f:
                 json.dump(self.spend, f, indent=1)
-            if fp == self.current and self.spend[fp] >= self.args.key_budget:
+            if fp == self.current and self.spend[fp] >= self.args.key_budget and not getattr(self.args, "drain", False):
                 print(f"  key {fp} reached ${self.spend[fp]:.2f}; switching key", flush=True)
                 self._select(start=self.i + 1)
         return cost
@@ -374,6 +384,14 @@ class Caller:
                       else f" failed after {time.time() - start:4.1f}s", flush=True)
                 msg = error_detail(err)
                 status = getattr(err, "status_code", None)
+                os.makedirs(os.path.dirname(ERROR_LOG), exist_ok=True)
+                with self.lock, open(ERROR_LOG, "a", encoding="utf-8") as f:
+                    f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} key {fp} spent ${self.ring.spend.get(fp, 0):.4f} "
+                            f"| {error_detail(err, 2000)}\n")
+                if a.drain and status in (400, 401, 402, 403, 429):
+                    print(f"  drain: key {fp} refused at estimated ${self.ring.spend.get(fp, 0):.4f}: {msg[:300]}", flush=True)
+                    self.ring.retire(fp, msg)
+                    continue
                 if status in (401, 402, 403, 429) and any(h in msg.lower() for h in EXHAUSTED_HINTS):
                     self.ring.retire(fp, msg)
                     continue
@@ -453,6 +471,12 @@ def cmd_run(args):
     elif args.ids:
         wanted = set(args.ids)
         todo = [c for c in chunks if c["short_id"] in wanted]
+    elif args.sample:
+        # Random chunks outside the pilot set, fixed by --seed (used for repeat-extraction checks)
+        pilot = set(open(PILOT_IDS, encoding="utf-8").read().split()) if os.path.exists(PILOT_IDS) else set()
+        pool = [c for c in chunks if c["short_id"] not in pilot]
+        random.Random(args.seed).shuffle(pool)
+        todo = sorted(pool[:args.sample], key=lambda c: c["short_id"])
     else:
         todo = chunks
     pending = [c for c in todo if not os.path.exists(cache_path(c))
@@ -635,7 +659,7 @@ CONFIG_PATH = os.path.join("data_vi", "llm_config.json")
 DEFAULT_CONFIG = {"model": "gemini-3.8-flash", "api_format": "anthropic", "base_url": "https://1gw.gwai.cloud",
                   "api_key_env": "GWAI_API_KEY", "min_interval": 2.0, "max_calls": 0, "reasoning_effort": None,
                   "workers": 4, "thinking": "default", "extra_body": {},
-                  "price_in": 0.75, "price_out": 3.75, "key_budget": 9.5}
+                  "price_in": 0.75, "price_out": 3.75, "key_budget": 9.95}
 # Google AI Studio instead: {"api_format": "openai", "base_url": GOOGLE_BASE_URL, "api_key_env": "GOOGLE_API_KEY",
 #                            "min_interval": 13.0}  (free tier: 5 requests/minute, 20/day for Flash)
 
@@ -664,6 +688,7 @@ def main():
     g.add_argument("--pilot", type=int, help="Sample this many chunks (saved to openie_pilot_ids.txt)")
     g.add_argument("--ids", nargs="+", help="Process these short ids (e.g. c0001 c0002)")
     g.add_argument("--all", action="store_true", help="Process the whole corpus")
+    g.add_argument("--sample", type=int, help="Random chunks outside the pilot set (seeded by --seed)")
     r.add_argument("--model", default=cfg["model"])
     r.add_argument("--base_url", default=cfg["base_url"], help="Endpoint (Google or the reseller gateway)")
     r.add_argument("--api_format", default=cfg["api_format"], choices=["openai", "anthropic"])
@@ -674,6 +699,10 @@ def main():
     r.add_argument("--reasoning_effort", default=cfg["reasoning_effort"], help="Optional: low / medium / high (if supported)")
     r.add_argument("--seed", type=int, default=2026)
     r.add_argument("--redo_bad", action="store_true", help="Also redo cached chunks whose replies were cut off")
+    r.add_argument("--only_key", help="Use only the .env key ending with these characters")
+    r.add_argument("--drain", action="store_true",
+                   help="Ignore key_budget; stop the key at the first auth/quota refusal (measures the real limit)")
+    r.add_argument("--cache_tag", default="", help="Write results to a separate cache folder <model>__<tag>")
     r.add_argument("--workers", type=int, default=cfg["workers"], help="Chunks processed in parallel")
     r.add_argument("--price_in", type=float, default=cfg["price_in"], help="USD per 1M input tokens")
     r.add_argument("--price_out", type=float, default=cfg["price_out"], help="USD per 1M output tokens")
@@ -702,7 +731,7 @@ def main():
     args = ap.parse_args()
     if hasattr(args, "thinking"):
         RUN.update(model=getattr(args, "model", cfg["model"]) if args.cmd != "check" else cfg["model"],
-                   thinking=args.thinking)
+                   thinking=args.thinking, cache_tag=getattr(args, "cache_tag", "") or "")
         args.extra_body = {**THINKING_BODY[args.thinking], **(getattr(args, "extra_body", None) or {})}
     {"run": cmd_run, "check": cmd_check, "review": cmd_review, "build": cmd_build}[args.cmd](args)
 
