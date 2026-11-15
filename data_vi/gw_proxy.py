@@ -13,7 +13,8 @@ spends most of its output budget on hidden thinking.
 
 Failed attempts are retried a few times with short pauses (--retries), then reported to the
 client as an error so its own retry logic takes over; each failure is logged with its status and
-message, and /v1/usage counts failures by kind.
+message, and /v1/usage counts failures by kind. Client errors (400/401/403/404) are not retried,
+except a bare 400 "bad request", which the gateway returns at random and which gets one retry.
 """
 import argparse
 import collections
@@ -64,6 +65,7 @@ class Upstream:
                   "extra_body": {"temperature": body.get("temperature", 0) or 0}}
         if system:
             kwargs["system"] = system
+        bad_request_retried = False
         for attempt in range(self.retries + 1):
             idx, cl = self.client()
             start = time.time()
@@ -90,7 +92,12 @@ class Upstream:
                 if status == 429 and "cost_limit" in msg:
                     self.drop(idx)
                     continue
-                if status in (400, 401, 403, 404):
+                # The gateway sometimes answers a valid request with a bare 400 "bad request";
+                # the same request succeeds when resent, so allow one retry for that case only.
+                transient_400 = status == 400 and "bad request" in msg.lower() and not bad_request_retried
+                if transient_400:
+                    bad_request_retried = True
+                elif status in (400, 401, 403, 404):
                     raise
                 if attempt < self.retries:
                     time.sleep(2 * 2 ** attempt)
