@@ -155,6 +155,64 @@ class TestVietnameseTragPlus(unittest.TestCase):
         self.assertGreater(float(pairs.scores(decomposed)[0]), 0)
 
 
+class TestVietnamesePlaceholdersAndNFC(unittest.TestCase):
+    """v6.1: Vietnamese placeholder names (?Người, ?NămA) and NFC in every text comparison."""
+
+    def test_unicode_placeholder_names(self):
+        from src.TRAG_plus import placeholders_in, count_placeholders, strip_placeholders
+        clue = {"subject": "?Người", "predicate": "lên ngôi năm", "object": "?NămA"}
+        with LangEnv("vi"):
+            self.assertEqual(placeholders_in("?Người | lên ngôi năm | ?NămA"), ["?Người", "?NămA"])
+            self.assertEqual(count_placeholders(clue), 2)
+            self.assertEqual(strip_placeholders("con của ?Người"), "con của")
+            self.assertEqual(placeholders_in("Ai là vua? ?A"), ["?A"])  # the "?" ending a title is not one
+        with LangEnv("en"):
+            self.assertEqual(placeholders_in("?Người | lên ngôi năm | ?NămA"), [])  # English: unchanged rule
+            self.assertEqual(placeholders_in("?A | born in | ?year1"), ["?A", "?year1"])
+
+    def test_binding_and_substitution_with_vietnamese_names(self):
+        from src.TRAG_plus import TRAGPlus
+        response = ("Fully Resolved Clue 1:\nSubject: Trần Thừa\nPredicate: là cha của\nObject: Trần Thái Tông\n"
+                    "Binding: ?Người = Trần Thái Tông\n")
+        with LangEnv("vi"):
+            resolved, _ = TRAGPlus._parse_plus(types.SimpleNamespace(), response)
+            self.assertEqual(resolved[0][1]["bindings"], {"?Người": "Trần Thái Tông"})
+            dummy = types.SimpleNamespace(_bindings={"?Người": "Trần Thái Tông"}, _stats={"bindings_applied": 0})
+            out = TRAGPlus._substitute(dummy, {"subject": "?Người", "predicate": "có con là", "object": "?B"})
+            self.assertEqual(out["subject"], "Trần Thái Tông")
+            self.assertEqual(out["object"], "?B")
+            self.assertEqual(dummy._stats["bindings_applied"], 1)
+
+    def test_nfc_in_matching(self):
+        from src.TRAG_plus import TRAGPlus, clue_key
+        nfd = unicodedata.normalize("NFD", "Trần Thái Tông")
+        with LangEnv("vi"):
+            self.assertEqual(TRAGPlus._field_match(nfd, "Trần Thái Tông"), 1.0)
+            self.assertEqual(clue_key({"subject": nfd, "predicate": "là", "object": "vua"}),
+                             clue_key({"subject": "Trần Thái Tông", "predicate": "là", "object": "vua"}))
+            results = [{"retrieved_passages": [{"text": "Nhà Lý dời đô ra Thăng Long."},
+                                               {"text": "Trần Thái Tông là vua đầu tiên của nhà Trần."}]}]
+            clues = [{"subject": nfd, "predicate": "là", "object": "?A"}]
+            out = TRAGPlus._evidence_passages(types.SimpleNamespace(), clues, results, limit=1)
+            self.assertEqual(out, ["Trần Thái Tông là vua đầu tiên của nhà Trần."])
+
+    def test_no_flags_same_prompts_in_vietnamese(self):
+        from src.TRAG import TRAG
+        from src.TRAG_plus import TRAGPlus
+        from test_trag_plus import build
+        with LangEnv("vi"):
+            rag_a, llm_a = build(TRAG, fe.chain_rules(named=False))
+            out_a = rag_a.trag_qa(fe.QUESTION, query_id="q0")
+            rag_b, llm_b = build(TRAGPlus, fe.chain_rules(named=False), fixes=[])
+            out_b = rag_b.trag_qa(fe.QUESTION, query_id="q0")
+        self.assertEqual(out_a["answer"], out_b["answer"])
+        self.assertEqual(llm_a.prompts, llm_b.prompts)
+
+    def test_vietnamese_note_asks_for_latin_placeholder_names(self):
+        from src.TRAG_plus import VI_NAMES_NOTE
+        self.assertIn("?A, ?B, ?C", VI_NAMES_NOTE)
+
+
 class TestRunColabV6(unittest.TestCase):
     def setUp(self):
         self.root = fe.tmpdir()
@@ -211,6 +269,9 @@ class TestRunColabV6(unittest.TestCase):
         self.assertTrue(final_prompts and all("Answer requirements" in p for p in final_prompts))
         self.assertEqual(recs[0]["prediction"], fe.GOLD)
         self.assertEqual(len(recs[0]["calls"]), recs[0]["llm_calls"])
+        self.assertGreater(recs[0]["n_bindings"], 0)          # s1 named the placeholders and bound them
+        self.assertIn("s4_rejected", recs[0])
+        self.assertEqual(s["plus_totals"]["n_bindings"], sum(r["n_bindings"] for r in recs))
 
     def test_batches_merge_to_the_full_run(self):
         import merge_results
@@ -234,6 +295,15 @@ class TestRunColabV6(unittest.TestCase):
         _, rows, n_trace, _ = error_analysis.label_run("outputs/results/merged_m.json", "reproduce/dataset/fake.json",
                                                         None, {}, 0.8)
         self.assertEqual((len(rows), n_trace), (2, 2))
+
+    def test_qids_selects_questions(self):
+        all_ids = [s["id"] for s in json.load(open("reproduce/dataset/fake.json"))]
+        name, data = self.run_main(["--method", "trag", "--qids", all_ids[1], "--tag", "pilot"])
+        self.assertIn("_ids1_pilot", name)
+        self.assertEqual([r["qid"] for r in data["records"]], [all_ids[1]])
+        self.assertEqual(data["records"][0]["id"], 1)
+        with self.assertRaises(SystemExit):
+            self.run_main(["--method", "trag", "--qids", "nope"])
 
     def test_refuses_to_overwrite_other_configuration(self):
         self.run_main(["--method", "trag", "--limit", "1"])

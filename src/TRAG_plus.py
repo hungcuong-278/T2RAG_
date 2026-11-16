@@ -44,6 +44,8 @@ logger = logging.getLogger(__name__)
 FIELDS = ("subject", "predicate", "object")
 # A placeholder is "?" or "?Name" standing as its own token (not the "?" ending a real title).
 PLACEHOLDER_TOKEN = re.compile(r"(?<![\w?])\?[A-Za-z0-9_]*(?![\w?])")
+# Vietnamese (T2RAG_LANG=vi): names may use any letter, e.g. ?Người, ?NămA.
+PLACEHOLDER_TOKEN_VI = re.compile(r"(?<![\w?])\?\w*(?![\w?])")
 QUESTION_WORDS = re.compile(r"\b(what|who|whom|whose|where|when|why|how|which)\b", re.IGNORECASE)
 # Vietnamese question words, removed only as whole words (longest first: "khi nào" before "nào").
 QUESTION_WORDS_VI = re.compile(r"(?<!\w)(bao giờ|khi nào|bao nhiêu|bao lâu|vì sao|tại sao|là gì|"
@@ -55,9 +57,23 @@ def is_vietnamese() -> bool:
     return os.environ.get("T2RAG_LANG", "en").lower() == "vi"
 
 
+def ph_regex():
+    """Placeholder pattern for the current language (Unicode names only for Vietnamese)."""
+    return PLACEHOLDER_TOKEN_VI if is_vietnamese() else PLACEHOLDER_TOKEN
+
+
+def fold(text: str) -> str:
+    """Text used for comparisons: stripped and lower-case; NFC-normalised for Vietnamese,
+    so that composed and decomposed diacritics compare equal (as in tokens())."""
+    text = (text or "").strip()
+    if is_vietnamese():
+        text = unicodedata.normalize("NFC", text)
+    return text.lower()
+
+
 # --------------------------------------------------------------------------- small helpers
 def placeholders_in(text: str) -> List[str]:
-    return PLACEHOLDER_TOKEN.findall(text or "")
+    return ph_regex().findall(text or "")
 
 
 def clue_placeholders(clue: Dict[str, str]) -> List[str]:
@@ -78,11 +94,11 @@ def count_question_marks(clue: Dict[str, str]) -> int:
 
 
 def strip_placeholders(text: str) -> str:
-    return " ".join(PLACEHOLDER_TOKEN.sub(" ", text or "").split())
+    return " ".join(ph_regex().sub(" ", text or "").split())
 
 
 def clue_key(clue: Dict[str, str]) -> Tuple[str, str, str]:
-    return tuple(clue.get(f, "").strip().lower() for f in FIELDS)
+    return tuple(fold(clue.get(f, "")) for f in FIELDS)
 
 
 def clean(clue: Dict[str, str]) -> Dict[str, str]:
@@ -164,7 +180,7 @@ S1_RESOLVE_NOTE = """
 """
 
 VI_NAMES_NOTE = """
-        Language rule: the passages are in Vietnamese. Write every entity, place, title and date exactly as it appears in the passages (Vietnamese, with diacritics); do not translate names into English.
+        Language rule: the passages are in Vietnamese. Write every entity, place, title and date exactly as it appears in the passages (Vietnamese, with diacritics); do not translate names into English. Name unknowns only ?A, ?B, ?C, ... (one Latin capital letter after the ?).
 """
 
 S4_RESOLVE_NOTE = """
@@ -472,7 +488,7 @@ class TRAGPlus(TRAG):
                     if "=" in part:
                         var, val = part.split("=", 1)
                         var, val = var.strip(), val.strip().strip('"').strip()
-                        if PLACEHOLDER_TOKEN.fullmatch(var) and val and not placeholders_in(val):
+                        if ph_regex().fullmatch(var) and val and not placeholders_in(val):
                             meta.setdefault("bindings", {})[var] = val
             elif line.startswith("Evidence:"):
                 meta["evidence"] = line.split("Evidence:", 1)[1].strip().strip('"').strip()
@@ -481,7 +497,7 @@ class TRAGPlus(TRAG):
 
     @staticmethod
     def _field_match(inp: str, out: str) -> float:
-        a, b = inp.strip().lower(), out.strip().lower()
+        a, b = fold(inp), fold(out)
         if placeholders_in(inp) and strip_placeholders(inp) == "":
             return 0.5  # a pure placeholder can become anything
         if a == b:
@@ -519,7 +535,7 @@ class TRAGPlus(TRAG):
         new = {}
         for f in FIELDS:
             text = clue.get(f, "")
-            new[f] = PLACEHOLDER_TOKEN.sub(lambda m: self._bindings.get(m.group(0), m.group(0)), text)
+            new[f] = ph_regex().sub(lambda m: self._bindings.get(m.group(0), m.group(0)), text)
         if new != clue:
             self._stats["bindings_applied"] += 1
         return new
@@ -719,7 +735,7 @@ Object: {c['object']}
             for f in ("subject", "object"):
                 v = strip_placeholders(c.get(f, ""))
                 if v:
-                    values.add(v.lower())
+                    values.add(fold(v))
         scored, seen = [], set()
         order = 0
         for rr in reversed(all_retrieval_results or []):  # latest round first
@@ -728,7 +744,7 @@ Object: {c['object']}
                 if not text or text in seen:
                     continue
                 seen.add(text)
-                low = text.lower()
+                low = fold(text)
                 hits = sum(1 for v in values if v in low)
                 scored.append((-hits, order, text))
                 order += 1
@@ -859,4 +875,4 @@ Object: {c['object']}
                 "all_final_clues": all_final, "all_retrieval_results": all_results, "total_iterations": iteration,
                 "remaining_fuzzy_clues": fuzzy, "completion_status": status,
                 "n_dropped_clues": self._stats["n_dropped_clues"], "s4_rejected": self._stats["s4_rejected"],
-                "bindings": dict(self._bindings)}
+                "bindings": dict(self._bindings), "plus_stats": dict(self._stats)}

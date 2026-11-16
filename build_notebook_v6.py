@@ -212,45 +212,72 @@ for ds in [d.strip() for d in DATASETS.split(',') if d.strip()]:
 """)
 
 md("""
-## 3. vnhistory (dữ liệu lịch sử)
+## 3. vnhistory: T²RAG+ (dữ liệu lịch sử)
 
-Dev = 50 câu đầu, test = 116 câu còn lại. Mặc định:
-- `--answer_format short`: yêu cầu đáp án ngắn bằng tiếng Việt (giảm lỗi trả lời dài; EM gốc vẫn được tính, có thêm EM_lenient);
-- mỗi cấu hình chạy **2 lượt** với cache riêng (`--cache_tag r1`, `r2`), để đo được dao động giữa các lượt.
-
-Kết quả 3 phương pháp gốc đã có (định dạng đáp án của bài báo). Nếu dùng `short` thì T²RAG gốc cũng phải chạy lại bằng `short` để so cùng điều kiện; ô dưới đã gồm T²RAG gốc.
+Cùng điều kiện với các lượt đã có (Standard RAG, HippoRAG2, T²RAG gốc): `gemini-3.8-flash`, `BAAI/bge-m3`,
+`--answer_format paper` (mặc định), `vnhistory.json` MD5 `b07cfa13…`, OpenIE MD5 `f6ff5da7…`.
+Mỗi cấu hình một tag riêng, mỗi lượt một cache riêng (`--cache_tag r1`, `r2`).
+Key gateway còn ít: **chạy thử 5 câu, gửi số liệu cho nhóm duyệt chi phí rồi mới chạy dev.**
 """)
 code("""
 !python check_vnhistory.py --openie_md5 f6ff5da7
+!md5sum reproduce/dataset/vnhistory.json outputs/vnhistory_univ/openie_results_ner.json
+""")
+md("**3.1 Chạy thử 5 câu dev** (3 câu 2 bước, 2 câu 3 bước), đủ cả 5 cải tiến.")
+code("""
+PILOT_IDS = '2hop_001,2hop_002,2hop_003,3hop_001,3hop_002'  #@param {type:"string"}
+usage()
+!python run_colab.py --dataset vnhistory --method trag_plus --fixes b,s1,s2,s3,s4 --qids {PILOT_IDS} --tag pilot5_plus_full --cache_tag pilot {COMMON}
+usage()
+backup()
+r = json.load(open(sorted(glob.glob('outputs/results/vnhistory_trag_plus_fx-b-s1-s2-s3-s4_*_ids5_pilot5_plus_full.json'))[-1]))
+s = r['summary']
+print({k: s[k] for k in ['ExactMatch', 'F1', 'avg_llm_calls', 'avg_prompt_tokens', 'avg_completion_tokens',
+                         'max_completion_tokens', 'plus_totals', 'errors']})
+for x in r['records']:
+    print(x['qid'], '| đáp:', x['prediction'], '| đúng:', x['gold_answers'][:3], '| gọi LLM:', x['llm_calls'],
+          '| bindings:', x.get('n_bindings'), '/ applied', x.get('bindings_applied'), '| s4 từ chối:', x.get('s4_rejected'))
+""")
+md("""
+Vết chi tiết (giá trị gán cho `?A`, `?B`… và bằng chứng S4) của câu đầu: `bindings` cho biết placeholder nào đã được gán,
+`stats.s4_rejected` là số lần S4 từ chối. Kiểm tra tên tiếng Việt có giữ nguyên dấu không.
 """)
 code("""
-VN_FORMAT = 'short'  #@param ['short', 'paper']
-VN = f'--answer_format {VN_FORMAT}'
-NOR_DEV = run_batches('vnhistory', 'nor', 0, 50, f'dev50_{VN_FORMAT}_nor', extra=VN, size=50)
-CONFIGS = ['', 'b', 'b,s1', 'b,s1,s3', 'b,s2', 'b,s1,s2,s3,s4']   # '' = T²RAG gốc
+tdir = s['trace_dir']
+for f in sorted(os.listdir(tdir))[:2]:
+    t = json.load(open(os.path.join(tdir, f)))
+    fin = t.get('final_results', t)
+    print(f, '\\n  bindings:', fin.get('bindings'), '\\n  stats:', fin.get('stats'))
+""")
+md("""
+**3.2 Ablation trên dev 50 câu** (sau khi nhóm duyệt chi phí). Mặc định 3 cấu hình; chạy lượt `r1` trước,
+lượt `r2` sau nếu còn tiền (điền `RUNS = 'r1,r2'`).
+""")
+code("""
+CONFIGS = 'b,s1 | b,s1,s3 | b,s1,s2,s3,s4'  #@param {type:"string"}
+RUNS = 'r1'  #@param {type:"string"}
 DEV_RUNS = {}
-for cfg in CONFIGS:
-    for r in ['r1', 'r2']:
-        method, fx = ('trag', '') if not cfg else ('trag_plus', f'--fixes {cfg}')
-        tag = f"dev50_{VN_FORMAT}_{(cfg or 'trag').replace(',', '-')}_{r}"
-        DEV_RUNS[(cfg, r)] = run_batches('vnhistory', method, 0, 50, tag, extra=f'{VN} --cache_tag {r} {fx}')
-    usage()
+for cfg in [c.strip() for c in CONFIGS.split('|') if c.strip()]:
+    for r in [x.strip() for x in RUNS.split(',') if x.strip()]:
+        tag = f"dev50_plus_{cfg.replace(',', '_')}_{r}"
+        DEV_RUNS[(cfg, r)] = run_batches('vnhistory', 'trag_plus', 0, 50, tag, extra=f'--cache_tag {r} --fixes {cfg}')
+        usage()
 """)
-md("Bảng dev (EM gốc và EM_lenient). Chọn 1–2 cấu hình tốt nhất **theo trung bình 2 lượt và so từng câu**, không theo một con số đơn lẻ.")
+md("""
+So với T²RAG gốc: chép file kết quả T²RAG gốc dev (định dạng `paper`) vào `outputs/results/` rồi điền tên tag của nó vào
+`BASE_TAG`. Chọn cấu hình theo **trung bình 2 lượt và so từng câu** (kiểm định dấu), không theo một con số đơn lẻ.
+""")
 code("""
-DEV_GLOB = f'outputs/results/vnhistory_*_{LLM_LABEL}_dev50_{VN_FORMAT}_*.json'   # chỉ các file đã gộp
-DEV_BASE = f'trag:dev50_{VN_FORMAT}_trag_r1'
-!python make_table.py --glob "{DEV_GLOB}" --baseline {DEV_BASE} --out_dir tables/vn_dev --n_boot 2000
-!python make_table.py --glob "{DEV_GLOB}" --baseline {DEV_BASE} --out_dir tables/vn_dev_lenient --n_boot 2000 --metric lenient
+BASE_TAG = 'dev50'  #@param {type:"string"}
+!python make_table.py --glob "outputs/results/vnhistory_*_{LLM_LABEL}_dev50_*.json" --glob "outputs/results/vnhistory_trag_*{BASE_TAG}*.json" --baseline trag:{BASE_TAG} --out_dir tables/vn_dev --n_boot 2000
 """)
-md("**Tập test (chạy một lần, sau khi đã chọn cấu hình).** Điền `BEST`.")
+md("**3.3 Tập test 116 câu, 2 lượt** cho cấu hình tốt nhất. Điền `BEST`.")
 code("""
 BEST = 'b,s1,s3'  #@param {type:"string"}
 TEST_RUNS = {}
 for r in ['r1', 'r2']:
-    TEST_RUNS[('trag', r)] = run_batches('vnhistory', 'trag', 50, 116, f'test116_{VN_FORMAT}_trag_{r}', extra=f'{VN} --cache_tag {r}')
-    TEST_RUNS[(BEST, r)] = run_batches('vnhistory', 'trag_plus', 50, 116, f"test116_{VN_FORMAT}_{BEST.replace(',', '-')}_{r}",
-                                       extra=f'{VN} --cache_tag {r} --fixes {BEST}')
+    TEST_RUNS[r] = run_batches('vnhistory', 'trag_plus', 50, 116, f"test116_plus_{BEST.replace(',', '_')}_{r}",
+                               extra=f'--cache_tag {r} --fixes {BEST}')
     usage()
 """)
 
@@ -261,12 +288,10 @@ Khi `vnhistory.json` lên bản mới (chỉ đổi đáp án thay thế), chấ
 `python rescore.py <các file kết quả> --questions reproduce/dataset/vnhistory.json`.
 """)
 code("""
-TEST_GLOB = f'outputs/results/vnhistory_*_{LLM_LABEL}_test116_{VN_FORMAT}_*.json'
-TEST_BASE = f'trag:test116_{VN_FORMAT}_trag_r1'
-T_TRAG, T_BEST = TEST_RUNS[('trag', 'r1')], TEST_RUNS[(BEST, 'r1')]
-!python make_table.py --glob "{TEST_GLOB}" --baseline {TEST_BASE} --out_dir tables/vn_test
-!python make_table.py --glob "{TEST_GLOB}" --baseline {TEST_BASE} --out_dir tables/vn_test_lenient --metric lenient
-!python error_analysis.py {T_TRAG} --compare {T_BEST}
+TEST_BASE_TAG = 'test116'  #@param {type:"string"}
+!python make_table.py --glob "outputs/results/vnhistory_*_{LLM_LABEL}_test116_*.json" --glob "outputs/results/vnhistory_trag_*{TEST_BASE_TAG}*.json" --baseline trag:{TEST_BASE_TAG} --out_dir tables/vn_test
+T_BEST = TEST_RUNS['r1']
+!python error_analysis.py {T_BEST}
 backup()
 """)
 

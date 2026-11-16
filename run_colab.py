@@ -335,6 +335,9 @@ def main():
                     help="trag_plus only: comma list of b,s1,s2,s3,s4,h2a (empty = same as trag)")
     ap.add_argument("--start", type=int, default=0, help="Skip the first N questions")
     ap.add_argument("--limit", type=int, default=50, help="Number of questions (0 = all after --start)")
+    ap.add_argument("--qids", default="",
+                    help="Comma list of question ids to run instead of --start/--limit (e.g. a pilot "
+                         "of 2hop_001,3hop_001); the run name gets _ids<N>")
     ap.add_argument("--llm_name", default="gemini-2.5-flash")
     ap.add_argument("--llm_base_url", default="https://generativelanguage.googleapis.com/v1beta/openai/")
     ap.add_argument("--embedding_name", default="BAAI/bge-m3")
@@ -386,9 +389,21 @@ def main():
     corpus = json.load(open(f"reproduce/dataset/{dataset}_corpus.json", encoding="utf-8"))
     questions_path = f"reproduce/dataset/{dataset}.json"
     samples = json.load(open(questions_path, encoding="utf-8"))
-    samples = samples[args.start:]
-    if args.limit and args.limit > 0:
-        samples = samples[:args.limit]
+    if args.qids:
+        wanted = [q.strip() for q in args.qids.split(",") if q.strip()]
+        index = {str(s.get("id", s.get("_id"))): i for i, s in enumerate(samples)}
+        unknown = [q for q in wanted if q not in index]
+        if unknown:
+            raise SystemExit(f"Unknown --qids {unknown[:5]}")
+        positions = sorted(index[q] for q in wanted)
+        samples = [samples[i] for i in positions]
+        args.start = 0
+    else:
+        positions = list(range(args.start, len(samples)))
+        samples = samples[args.start:]
+        if args.limit and args.limit > 0:
+            samples = samples[:args.limit]
+        positions = positions[:len(samples)]
     if not samples:
         raise SystemExit("No questions selected: check --start and --limit.")
     docs = [f"{d['title']}\n{d['text']}" for d in corpus]
@@ -407,7 +422,7 @@ def main():
     method_label = args.method + (("_fx-" + "-".join(fixes)) if args.method == "trag_plus" else "")
     llm_label = args.llm_name.replace("/", "-").replace(":", "-")
     run_name = f"{dataset}_{method_label}_{llm_label}" + (f"_from{args.start}" if args.start else "") \
-               + f"_{len(queries)}q" + (f"_{args.tag}" if args.tag else "")
+               + (f"_ids{len(queries)}" if args.qids else f"_{len(queries)}q") + (f"_{args.tag}" if args.tag else "")
 
     reusable_dir = f"outputs/{dataset}_univ"
     method_dir = f"outputs/{dataset}_{args.method}"
@@ -539,6 +554,11 @@ def main():
                     "n_remaining_fuzzy": len(out.get("remaining_fuzzy_clues", []) or []),
                     "n_dropped_clues": out.get("n_dropped_clues"),
                 })
+                if "plus_stats" in out:  # T2RAG+: placeholder bindings and S4 decisions of this question
+                    ps = out["plus_stats"]
+                    stats.update({"n_bindings": len(out.get("bindings") or {}),
+                                  "bindings_applied": ps.get("bindings_applied"),
+                                  "s4_rejected": ps.get("s4_rejected"), "s4_accepted": ps.get("s4_accepted")})
                 return out
             finally:
                 if counter:
@@ -584,7 +604,7 @@ def main():
             n_gold += len(golds)
         qid = samples[i].get("id", samples[i].get("_id", str(i)))
         hops = hops_of(qid)  # MuSiQue: 2hop / 3hop1 / 4hop2 ...; vnhistory: 1hop_ / 2hop_ / 3hop_
-        rec = {"id": args.start + i, "qid": qid, "hops": hops, "question": sol.question,
+        rec = {"id": positions[i], "qid": qid, "hops": hops, "question": sol.question,
                "prediction": sol.answer, "gold_answers": sorted(gold_answers[i]), "em": em,
                "f1": round(f1, 4), "em_lenient": em_l, "f1_lenient": round(f1_l, 4),
                "multi_answer": multi, "long_answer": len(str(sol.answer).split()) > 8,
@@ -606,7 +626,7 @@ def main():
     summary = {
         "run_name": run_name, "dataset": dataset, "method": method_label, "base_method": args.method,
         "fixes": fixes, "tag": args.tag, "lang": lang, "llm": args.llm_name, "start": args.start,
-        "embedding": args.embedding_name, "num_questions": len(queries),
+        "embedding": args.embedding_name, "num_questions": len(queries), "qids": args.qids or None,
         "qa_top_k": args.qa_top_k, "max_qa_steps": args.max_qa_steps,
         "answer_format": args.answer_format, "llm_cache": shared_cache,
         "questions_md5": file_md5(questions_path),
@@ -626,6 +646,9 @@ def main():
         "pct_all_resolved": (round(100 * float(np.mean([bool(r.get("all_resolved")) for r in records])), 1)
                              if per_question else None),
         "total_llm": counter.total if counter else None,
+        "plus_totals": ({k: sum(r.get(k) or 0 for r in records)
+                         for k in ("n_bindings", "bindings_applied", "s4_rejected", "s4_accepted", "n_dropped_clues")}
+                        if args.method == "trag_plus" else None),
         "max_completion_tokens": counter.max_completion_tokens if counter else None,
         "n_long_calls": counter.long_calls if counter else None,
         "trace_dir": getattr(rag, "intermediate_results_dir", None),
