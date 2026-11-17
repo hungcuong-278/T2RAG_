@@ -71,6 +71,26 @@ class TestMakeTable(unittest.TestCase):
         cost = read(os.path.join(out, "table_cost.md"))
         self.assertIn("5,00", cost)
 
+    def test_pool_runs(self):
+        import make_table
+        p = lambda n: os.path.join(self.root, n)  # noqa: E731
+        # run 1 gets questions 0-9 right, run 2 gets 0-4 right: pooled EM = (10 + 5) / 2 / 20 = 37.5
+        r1 = [rec(f"2hop_{i}", 1.0 if i < 10 else 0.0, 1.0 if i < 10 else 0.0) for i in range(20)]
+        r2 = [rec(f"2hop_{i}", 1.0 if i < 5 else 0.0, 1.0 if i < 5 else 0.0) for i in range(20)]
+        write_result(p("a_r1.json"), "vnhistory", "trag_plus", r1, tag="test_r1", avg_llm_calls=4.0)
+        write_result(p("a_r2.json"), "vnhistory", "trag_plus", r2, tag="test_r2", avg_llm_calls=4.0)
+        # v2 merged files have no summary.dataset: vnhistory is inferred from the qids
+        write_result(p("old.json"), "", "trag", [rec(f"2hop_{i}", 0.0, 0.0) for i in range(20)], tag="test_r1")
+        out = p("tables")
+        make_table.main([p("a_r1.json"), p("a_r2.json"), p("old.json"), "--pool_runs", "--baseline", "trag:test",
+                         "--out_dir", out, "--n_boot", "2000", "--price_in", "1", "--price_out", "1"])
+        md = read(os.path.join(out, "table_main.md"))
+        line = [x for x in md.splitlines() if x.startswith("| trag_plus:test (TB 2 lượt)")][0]
+        self.assertIn("37,5†", line)
+        cost = read(os.path.join(out, "table_cost.md"))
+        self.assertIn("| trag_plus:test (TB 2 lượt) | vnhistory | 40 |", cost)
+        self.assertIn("USD/câu", cost)
+
     def test_bootstrap(self):
         from make_table import paired_bootstrap_p
         self.assertEqual(paired_bootstrap_p([1, 1, 1], [1, 1, 1]), 1.0)

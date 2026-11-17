@@ -163,6 +163,65 @@ class TestS3(unittest.TestCase):
         self.assertEqual(out["answer"], fe.GOLD)
 
 
+def with_final(rules, final_text):
+    """chain_rules with the final answer replaced (the reasoning steps stay the same)."""
+    return [r for r in rules if r[0] != ["Based on the reasoning clues"]] + [(["Based on the reasoning clues"], final_text)]
+
+
+class TestS5(unittest.TestCase):
+    FULL = ["b", "s1", "s2", "s3", "s4"]
+
+    def test_good_answer_costs_no_extra_call(self):
+        from src.TRAG_plus import TRAGPlus
+        rag, llm = build(TRAGPlus, fe.chain_rules(), fixes=self.FULL + ["s5"])
+        out = rag.trag_qa(fe.QUESTION, query_id="q0")
+        self.assertEqual(out["answer"], fe.GOLD)
+        self.assertFalse(any("A previous attempt answered" in p for p in llm.prompts))
+        self.assertEqual((out["plus_stats"]["s5_extracted"], out["plus_stats"]["s5_reasked"]), (0, 0))
+
+    def test_answer_after_marker_is_extracted(self):
+        from src.TRAG_plus import TRAGPlus
+        leak = "Để trả lời câu hỏi, ta xâu chuỗi các manh mối: Tran Lieu sinh năm 1211.\nĐáp án: **1211**"
+        rag, llm = build(TRAGPlus, with_final(fe.chain_rules(), leak), fixes=self.FULL + ["s5"])
+        out = rag.trag_qa(fe.QUESTION, query_id="q0")
+        self.assertEqual(out["answer"], "1211")
+        self.assertEqual(out["plus_stats"]["s5_extracted"], 1)
+        self.assertFalse(any("A previous attempt answered" in p for p in llm.prompts))
+
+    def test_abstention_is_asked_again(self):
+        from src.TRAG_plus import TRAGPlus
+        rules = [(["A previous attempt answered"], "Answer: 1211")] + with_final(fe.chain_rules(), "NOT FOUND")
+        rag, llm = build(TRAGPlus, rules, fixes=self.FULL + ["s5"])
+        out = rag.trag_qa(fe.QUESTION, query_id="q0")
+        self.assertEqual(out["answer"], "1211")
+        self.assertEqual(out["plus_stats"]["s5_reasked"], 1)
+        reask = [p for p in llm.prompts if "A previous attempt answered" in p][0]
+        self.assertIn("Supporting Evidence", reask)   # s3 evidence is passed on
+        self.assertIn("NOT FOUND", reask)
+
+    def test_bad_reask_keeps_the_original(self):
+        from src.TRAG_plus import TRAGPlus
+        rules = [(["A previous attempt answered"], "không rõ")] + with_final(fe.chain_rules(), "NOT FOUND")
+        rag, _ = build(TRAGPlus, rules, fixes=["b", "s1", "s5"])
+        self.assertEqual(rag.trag_qa(fe.QUESTION, query_id="q0")["answer"], "NOT FOUND")
+
+    def test_without_s5_nothing_changes(self):
+        from src.TRAG_plus import TRAGPlus
+        rag, llm = build(TRAGPlus, with_final(fe.chain_rules(), "NOT FOUND"), fixes=self.FULL)
+        self.assertEqual(rag.trag_qa(fe.QUESTION, query_id="q0")["answer"], "NOT FOUND")
+        self.assertFalse(any("A previous attempt answered" in p for p in llm.prompts))
+
+    def test_detector(self):
+        from src.TRAG_plus import TRAGPlus
+        rag, _ = build(TRAGPlus, fe.chain_rules(), fixes=["s5"])
+        for bad in ("NOT FOUND", "Không rõ", "Không được đề cập trong ngữ cảnh", "[Không được đề cập cụ thể trong văn bản]",
+                    "Dựa vào các đoạn văn được cung cấp, không có thông tin", "Để trả lời câu hỏi này, ta xác định"):
+            self.assertIsNotNone(rag._answer_problem(bad), bad)
+        for good in ("1211", "Trần Hưng Đạo", "Năm Giáp Tý (1504)", "Sông Như Nguyệt (sông Cầu)", "phía Nam",
+                     "Không Lộ", "Nhân Thành hầu Trần Phó Duyệt"):
+            self.assertIsNone(rag._answer_problem(good), good)
+
+
 class TestS4(unittest.TestCase):
     def test_supported_values_are_accepted(self):
         from src.TRAG_plus import TRAGPlus

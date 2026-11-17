@@ -79,14 +79,60 @@ def get_gold_answers(samples):
     return gold_answers
 
 
+VI_TONES = "\u0300\u0301\u0303\u0309\u0323"  # huyền, sắc, ngã, hỏi, nặng (combining marks)
+VI_VOWELS = "aăâeêioôơuưy"
+
+
+def vi_tone_canonical(syllable):
+    """Put the tone mark of a lower-case Vietnamese syllable on one fixed vowel, so old and new
+    placement give the same text: "hoà" / "hòa" -> "hòa", "thuỷ" / "thủy" -> "thủy".
+    Rule (old style): a vowel with a hat or horn (ê ô ơ â ă ư; the second one of ươ, uô, iê)
+    takes the tone; otherwise the last vowel if a consonant follows, else the first vowel of a
+    two-vowel nucleus and the middle one of a three-vowel nucleus. "qu" and "gi" + vowel count
+    as consonants. Words that are not Vietnamese syllables come back unchanged except NFC."""
+    import unicodedata
+    d = unicodedata.normalize("NFD", syllable)
+    tones = [ch for ch in d if ch in VI_TONES]
+    if len(tones) != 1:
+        return unicodedata.normalize("NFC", syllable)
+    base = unicodedata.normalize("NFC", "".join(ch for ch in d if ch not in VI_TONES))
+    start = 0
+    if base.startswith("qu") or (base.startswith("gi") and len(base) > 2 and base[2] in VI_VOWELS):
+        start = 2
+    idx = [i for i in range(start, len(base)) if base[i] in VI_VOWELS]
+    if not idx:
+        idx = [i for i in range(len(base)) if base[i] in VI_VOWELS]  # "gì", "quý": the i / y itself
+        if not idx:
+            return unicodedata.normalize("NFC", syllable)
+    # the vowel nucleus is the first run of consecutive vowels
+    nucleus = [idx[0]]
+    for i in idx[1:]:
+        if i == nucleus[-1] + 1:
+            nucleus.append(i)
+        else:
+            break
+    hats = [i for i in nucleus if base[i] in "ăâêôơư"]
+    if hats:
+        pos = hats[-1]
+    elif len(nucleus) == 1:
+        pos = nucleus[0]
+    elif nucleus[-1] + 1 < len(base):  # closed syllable: hoàng, thuyết
+        pos = nucleus[-1]
+    else:
+        pos = nucleus[0] if len(nucleus) == 2 else nucleus[1]
+    out = base[:pos + 1] + tones[0] + base[pos + 1:]
+    return unicodedata.normalize("NFC", out)
+
+
 def normalize(text):
     """Same as the repo's normalize_answer; for Vietnamese (T2RAG_LANG=vi): NFC, Unicode
-    punctuation removed, and no English article removal ("an" is a Vietnamese syllable)."""
+    punctuation removed, no English article removal ("an" is a Vietnamese syllable), and one
+    tone placement for every syllable (hoà = hòa, thuỷ = thủy)."""
     if os.environ.get("T2RAG_LANG", "en").lower() == "vi":
         import unicodedata
         text = unicodedata.normalize("NFC", str(text)).lower()
         text = "".join(" " if unicodedata.category(ch).startswith("P") else ch for ch in text)
-        return " ".join(text.split())
+        return " ".join(vi_tone_canonical(w) for w in text.split())
     text = str(text).lower()
     text = "".join(ch for ch in text if ch not in set(string.punctuation))
     text = re.sub(r"\b(a|an|the)\b", " ", text)
@@ -416,7 +462,7 @@ def main():
 
     fixes = sorted(f.strip().lower() for f in args.fixes.split(",") if f.strip()) \
         if args.method == "trag_plus" else []
-    known = {"b", "s1", "s2", "s3", "s4", "h2a"}
+    known = {"b", "s1", "s2", "s3", "s4", "s5", "h2a"}
     if set(fixes) - known:
         raise SystemExit(f"Unknown --fixes {sorted(set(fixes) - known)}; use {sorted(known)}")
     method_label = args.method + (("_fx-" + "-".join(fixes)) if args.method == "trag_plus" else "")
@@ -558,7 +604,8 @@ def main():
                     ps = out["plus_stats"]
                     stats.update({"n_bindings": len(out.get("bindings") or {}),
                                   "bindings_applied": ps.get("bindings_applied"),
-                                  "s4_rejected": ps.get("s4_rejected"), "s4_accepted": ps.get("s4_accepted")})
+                                  "s4_rejected": ps.get("s4_rejected"), "s4_accepted": ps.get("s4_accepted"),
+                                  "s5_extracted": ps.get("s5_extracted"), "s5_reasked": ps.get("s5_reasked")})
                 return out
             finally:
                 if counter:
@@ -631,7 +678,10 @@ def main():
         "answer_format": args.answer_format, "llm_cache": shared_cache,
         "questions_md5": file_md5(questions_path),
         "openie_md5": file_md5(os.path.join(reusable_dir, "openie_results_ner.json")) if has_openie else None,
-        "ExactMatch": overall["ExactMatch"], "F1": overall["F1"],
+        # EM / F1 = mean of the per-question scores below (run_colab.normalize); the repo's own
+        # evaluation is kept for reference (it differs only for Vietnamese tone placement)
+        "ExactMatch": avg("em", 4), "F1": avg("f1", 4),
+        "ExactMatch_repo": overall["ExactMatch"], "F1_repo": overall["F1"],
         "EM_lenient": avg("em_lenient"), "F1_lenient": avg("f1_lenient"),
         "n_long_answers": sum(bool(r["long_answer"]) for r in records),
         "n_multi_answers": sum(bool(r["multi_answer"]) for r in records),
@@ -647,7 +697,8 @@ def main():
                              if per_question else None),
         "total_llm": counter.total if counter else None,
         "plus_totals": ({k: sum(r.get(k) or 0 for r in records)
-                         for k in ("n_bindings", "bindings_applied", "s4_rejected", "s4_accepted", "n_dropped_clues")}
+                         for k in ("n_bindings", "bindings_applied", "s4_rejected", "s4_accepted", "n_dropped_clues",
+                                   "s5_extracted", "s5_reasked")}
                         if args.method == "trag_plus" else None),
         "max_completion_tokens": counter.max_completion_tokens if counter else None,
         "n_long_calls": counter.long_calls if counter else None,

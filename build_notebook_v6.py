@@ -215,7 +215,8 @@ md("""
 ## 3. vnhistory: T²RAG+ (dữ liệu lịch sử)
 
 Cùng điều kiện với các lượt đã có (Standard RAG, HippoRAG2, T²RAG gốc): `gemini-3.8-flash`, `BAAI/bge-m3`,
-`--answer_format paper` (mặc định), `vnhistory.json` MD5 `b07cfa13…`, OpenIE MD5 `f6ff5da7…`.
+`--answer_format paper` (mặc định), `vnhistory.json` v1.1 MD5 `1c088232…` (v1.0 `b07cfa13…` chỉ khác đáp án thay thế:
+kết quả cũ chấm lại bằng `rescore.py`, không cần chạy lại), OpenIE MD5 `f6ff5da7…`.
 Mỗi cấu hình một tag riêng, mỗi lượt một cache riêng (`--cache_tag r1`, `r2`).
 Key gateway còn ít: **chạy thử 5 câu, gửi số liệu cho nhóm duyệt chi phí rồi mới chạy dev.**
 """)
@@ -282,6 +283,20 @@ for r in ['r1', 'r2']:
 """)
 
 md("""
+**3.4 S5 (bảo vệ câu trả lời) trên dev.** S5 chỉ thêm một lượt gọi khi câu trả lời cuối là một đoạn suy luận dài
+hoặc "NOT FOUND"/"không rõ"; mọi lời gọi khác trùng prompt với lượt full nên lấy từ cache `r1`/`r2` (gần như không tốn tiền).
+Chỉ chạy test với S5 **sau khi** dev cho thấy S5 có ích (so từng câu với lượt full cùng cache).
+""")
+code("""
+S5_CFG = 'b,s1,s2,s3,s4,s5'  #@param {type:"string"}
+for r in ['r1', 'r2']:
+    DEV_RUNS[(S5_CFG, r)] = run_batches('vnhistory', 'trag_plus', 0, 50, f"dev50_plus_{S5_CFG.replace(',', '_')}_{r}",
+                                        extra=f'--cache_tag {r} --fixes {S5_CFG}')
+    usage()
+!python compare_methods.py {DEV_RUNS[(S5_CFG, 'r1')]} {DEV_RUNS.get(('b,s1,s2,s3,s4', 'r1'), DEV_RUNS[(S5_CFG, 'r1')])}
+""")
+
+md("""
 ## 4. Bảng và phân tích lỗi
 
 Khi `vnhistory.json` lên bản mới (chỉ đổi đáp án thay thế), chấm lại mà **không gọi model**:
@@ -289,7 +304,10 @@ Khi `vnhistory.json` lên bản mới (chỉ đổi đáp án thay thế), chấ
 """)
 code("""
 TEST_BASE_TAG = 'test116'  #@param {type:"string"}
-!python make_table.py --glob "outputs/results/vnhistory_*_{LLM_LABEL}_test116_*.json" --glob "outputs/results/vnhistory_trag_*{TEST_BASE_TAG}*.json" --baseline trag:{TEST_BASE_TAG} --out_dir tables/vn_test
+# merged files only (chunk files are named ..._from50_10q_test116...), rescored on the current vnhistory.json;
+# --pool_runs averages r1 / r2 per question and tests on the per-question means
+!python rescore.py outputs/results/vnhistory_*_{LLM_LABEL}_test116_*.json outputs/results/vnhistory_trag_{LLM_LABEL}_*{TEST_BASE_TAG}*.json --questions reproduce/dataset/vnhistory.json --out_dir outputs/results/rescored
+!python make_table.py --glob "outputs/results/rescored/*.json" --pool_runs --baseline trag:{TEST_BASE_TAG} --price_in 0.75 --price_out 3.75 --out_dir tables/vn_test
 T_BEST = TEST_RUNS['r1']
 !python error_analysis.py {T_BEST}
 backup()

@@ -18,6 +18,10 @@ Flags
   s3  the final answer step also reads up to 3 evidence passages (TRAG.py final_qa reads clues only)
   s4  each resolved value must come with a quoted evidence sentence that is checked against the
       passages; unsupported values are not locked and are searched again (best with s1)
+  s5  answer guard on the final answer: if it is a long reasoning text, the short answer after an
+      "Answer:" marker is kept; if there is none, or the answer is an abstention ("NOT FOUND",
+      "không rõ", ...), one extra LLM call asks for the single most likely short answer
+      (official final_qa returns whatever the model wrote; ~10% of dev answers were such texts)
   h2a reserved for the graph fallback (Huong 2), not implemented yet
 
 Vietnamese (T2RAG_LANG=vi, set by run_colab.py --lang vi / vnhistory datasets): with b, Vietnamese
@@ -191,11 +195,23 @@ S4_RESOLVE_NOTE = """
 """
 
 
+# S5: answers that are abstentions or reasoning texts instead of one short answer
+S5_MAX_WORDS = 12
+ABSTAIN = re.compile(r"^\W*(not found|unknown|none|n/?a|không rõ|chưa rõ|không xác định|không tìm thấy|"
+                     r"không (?:được )?đề cập|không có (?:thông tin|dữ liệu)|không biết)\b|"
+                     r"\b(không được đề cập|không có thông tin|không tìm thấy thông tin|not mentioned|not found)\b",
+                     re.IGNORECASE)
+REASONING_START = re.compile(r"^\W*(để trả lời|dựa (?:vào|trên)|theo các (?:manh mối|dữ kiện)|ta (?:cần|xác định)|"
+                             r"to answer|based on|let'?s|step 1|bước 1)", re.IGNORECASE)
+ANSWER_MARKER = re.compile(r"(?:final answer|answer|đáp án(?: cuối cùng)?|câu trả lời(?: cuối cùng)?|trả lời)\s*\**\s*[:：]",
+                           re.IGNORECASE)
+
+
 class TRAGPlus(TRAG):
     def __init__(self, global_config=None, max_qa_steps: int = 3, fixes=(), s1_max_steps: int = 5,
                  s2_min_per_clue: int = 2, s2_max_k: int = 10, s4_match_threshold: float = 0.8, **kwargs):
         self.fixes = frozenset(f.strip().lower() for f in fixes if f and f.strip())
-        unknown = self.fixes - {"b", "s1", "s2", "s3", "s4", "h2a"}
+        unknown = self.fixes - {"b", "s1", "s2", "s3", "s4", "s5", "h2a"}
         if unknown:
             raise ValueError(f"Unknown fixes: {sorted(unknown)}")
         if "h2a" in self.fixes:
@@ -222,7 +238,8 @@ class TRAGPlus(TRAG):
     def _reset_query_state(self):
         self._bindings: Dict[str, str] = {}
         self._evidence: Dict[Tuple[str, str, str], str] = {}
-        self._stats = {"n_dropped_clues": 0, "s4_rejected": 0, "s4_accepted": 0, "bindings_applied": 0}
+        self._stats = {"n_dropped_clues": 0, "s4_rejected": 0, "s4_accepted": 0, "bindings_applied": 0,
+                       "s5_extracted": 0, "s5_reasked": 0}
         self._last_prompt_passages: List[str] = []
 
     @contextlib.contextmanager
@@ -752,6 +769,66 @@ Object: {c['object']}
         return [t[:max_chars] for _, _, t in scored[:limit]]
 
     def final_qa(self, query, all_traceable_resolved_clues, all_retrieval_results) -> str:
+        answer = self._final_qa_s3(query, all_traceable_resolved_clues, all_retrieval_results)
+        if self.on("s5"):
+            answer = self._guard_answer(answer, query, all_traceable_resolved_clues)
+        return answer
+
+    # ------------------------------------------------------------------ S5: answer guard
+    def _answer_problem(self, answer: str) -> Optional[str]:
+        """'abstain', 'long' or None."""
+        text = " ".join(str(answer).split())
+        if not text or ABSTAIN.search(text):
+            return "abstain"
+        if len(text.split()) > S5_MAX_WORDS or REASONING_START.match(text) or "\n" in str(answer).strip():
+            return "long"
+        return None
+
+    @staticmethod
+    def _answer_after_marker(text: str) -> Optional[str]:
+        """Short answer written after the last 'Answer:' / 'Đáp án:' marker, if any."""
+        hits = list(ANSWER_MARKER.finditer(str(text)))
+        if not hits:
+            return None
+        tail = str(text)[hits[-1].end():].strip().splitlines()
+        tail = tail[0].strip(" *\"'.") if tail else ""
+        return tail or None
+
+    def _guard_answer(self, answer: str, query: str, clues: List[Dict[str, str]]) -> str:
+        problem = self._answer_problem(answer)
+        if problem is None:
+            return answer
+        if problem == "long":
+            short = self._answer_after_marker(answer)
+            if short and self._answer_problem(short) is None:
+                self._stats["s5_extracted"] += 1
+                return short
+        self._stats["s5_reasked"] += 1
+        clue_text = "\n".join(f"Clue {i + 1}: {c.get('subject', '')} | {c.get('predicate', '')} | {c.get('object', '')}"
+                              for i, c in enumerate(clues))
+        evidence = getattr(self, "_last_final_evidence", None) or ""
+        lang_rule = ("- Write the answer in Vietnamese, copying names exactly as they appear in the clues or evidence.\n"
+                     if is_vietnamese() else "")
+        prompt = (f"Question: {query}\n\nKey Reasoning Clues:\n{clue_text}\n" +
+                  (f"\nSupporting Evidence:\n{evidence}\n" if evidence else "") +
+                  f"\nA previous attempt answered:\n{str(answer)[:1500]}\n\n"
+                  "Give the final answer to the question.\n"
+                  "- One entity, date, number or short phrase only, at most 8 words, no explanation.\n"
+                  "- Do not answer that the information is missing: give the most likely answer from the clues "
+                  "and evidence.\n" + lang_rule + "\nAnswer:")
+        try:
+            response = self.llm_model.infer([{"role": "user", "content": prompt}])
+            text = response[0] if isinstance(response, tuple) else response
+            text = str(text).split("Answer:")[-1].strip()
+        except Exception as e:  # keep the original answer if the extra call fails
+            logger.error(f"S5 re-ask failed: {e}")
+            return answer
+        if text and self._answer_problem(text) is None:
+            return text
+        short = self._answer_after_marker(text) if text else None
+        return short if short and self._answer_problem(short) is None else answer
+
+    def _final_qa_s3(self, query, all_traceable_resolved_clues, all_retrieval_results) -> str:
         if not self.on("s3"):
             return super().final_qa(query, all_traceable_resolved_clues, all_retrieval_results)
         quotes = [self._evidence[clue_key(c)] for c in all_traceable_resolved_clues if clue_key(c) in self._evidence]

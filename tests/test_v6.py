@@ -284,6 +284,12 @@ class TestRunColabV6(unittest.TestCase):
         for key in ("ExactMatch", "F1", "EM_lenient", "by_hops", "recall_first5_docs", "avg_llm_calls"):
             self.assertEqual(s[key], full["summary"][key], key)
         self.assertEqual(s["num_questions"], 2)
+        # counters are summed over the batches (v6.1 copied them from the first batch)
+        self.assertEqual(s["total_llm"]["llm_calls"],
+                         a["summary"]["total_llm"]["llm_calls"] + b["summary"]["total_llm"]["llm_calls"])
+        self.assertEqual(s["plus_totals"], full["summary"]["plus_totals"])
+        self.assertEqual(s["pct_all_resolved"], full["summary"]["pct_all_resolved"])
+        self.assertEqual(s["avg_retrieved_docs"], full["summary"]["avg_retrieved_docs"])
         with self.assertRaises(SystemExit):
             merge_results.merge([a, full])  # different --tag
         # the merged file keeps one trace folder per batch, so error_analysis finds every trace

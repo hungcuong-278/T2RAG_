@@ -15,9 +15,14 @@ Failed attempts are retried a few times with short pauses (--retries), then repo
 client as an error so its own retry logic takes over; each failure is logged with its status and
 message, and /v1/usage counts failures by kind. Client errors (400/401/403/404) are not retried,
 except a bare 400 "bad request", which the gateway returns at random and which gets one retry.
+
+--timeout is a read timeout of the HTTP client, so a reply that trickles in never hits it (calls of
+290-990 s were seen). --deadline caps the whole attempt: past it the proxy stops waiting, logs a
+"deadline" error and retries (the abandoned call may still finish and be billed by the gateway).
 """
 import argparse
 import collections
+import concurrent.futures
 import json
 import os
 import sys
@@ -36,11 +41,13 @@ def load_keys():
 
 
 class Upstream:
-    def __init__(self, keys, max_tokens, timeout, retries):
+    def __init__(self, keys, max_tokens, timeout, retries, deadline=None):
         if not keys:
             sys.exit("No GWAI_API_KEY* variable set")
         self.keys, self.i, self.lock = keys, 0, threading.Lock()
         self.max_tokens, self.timeout, self.retries = max_tokens, timeout, retries
+        self.deadline = deadline or timeout
+        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=64)
         self.usage = {"calls": 0, "errors": 0, "in": 0, "out": 0}
         self.error_kinds = collections.Counter()
 
@@ -70,7 +77,11 @@ class Upstream:
             idx, cl = self.client()
             start = time.time()
             try:
-                resp = cl.messages.create(**kwargs)
+                future = self.pool.submit(cl.messages.create, **kwargs)
+                try:
+                    resp = future.result(timeout=self.deadline)
+                except concurrent.futures.TimeoutError:
+                    raise TimeoutError(f"no complete reply within the {self.deadline:.0f}s deadline") from None
                 text = "".join(getattr(b, "text", "") or "" for b in resp.content or [])
                 if not text:
                     raise RuntimeError("empty response from the gateway")
@@ -159,9 +170,11 @@ def main():
     ap.add_argument("--max_tokens", type=int, default=32000)
     ap.add_argument("--timeout", type=float, default=300, help="Seconds to wait for one gateway reply")
     ap.add_argument("--retries", type=int, default=3, help="Quick retries inside the proxy before reporting an error")
+    ap.add_argument("--deadline", type=float, default=None,
+                    help="Total seconds for one attempt, however slowly the reply arrives (default: --timeout)")
     args = ap.parse_args()
     keys = load_keys()
-    up = Upstream(keys, args.max_tokens, args.timeout, args.retries)
+    up = Upstream(keys, args.max_tokens, args.timeout, args.retries, args.deadline)
     print(f"[gw_proxy] {len(keys)} key(s); listening on http://localhost:{args.port}/v1", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(up, args.model)).serve_forever()
 

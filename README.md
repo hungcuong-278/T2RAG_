@@ -14,7 +14,7 @@ Repo này chứa **code nhóm viết thêm** trên nền phương pháp T²RAG:
 
 | File / thư mục | Nội dung |
 |---|---|
-| `src/TRAG_plus.py` | T²RAG cải tiến (lớp con của `TRAG`, không sửa code gốc). Bật từng phần bằng `--fixes`: `b` (sửa lỗi code gốc L2, L4, L5, L6), `s1` (giữ bộ ba chưa giải + bảng biến), `s2` (tìm kiếm lai BM25 + vector), `s3` (trả lời có bằng chứng), `s4` (kiểm chứng giá trị) |
+| `src/TRAG_plus.py` | T²RAG cải tiến (lớp con của `TRAG`, không sửa code gốc). Bật từng phần bằng `--fixes`: `b` (sửa lỗi code gốc L2, L4, L5, L6), `s1` (giữ bộ ba chưa giải + bảng biến), `s2` (tìm kiếm lai BM25 + vector), `s3` (trả lời có bằng chứng), `s4` (kiểm chứng giá trị), `s5` (bảo vệ câu trả lời: lấy đáp án ngắn sau "Answer:", hỏi lại một lần khi model trả về đoạn suy luận hoặc "NOT FOUND"; mặc định tắt) |
 | `run_colab.py` | Chạy một phương pháp (`trag`, `trag_plus`, `hippo`, `standard`, `nor` = không truy hồi) trên một phần bộ dữ liệu; lưu EM/F1, EM/F1 nới (`EM_lenient`), Recall@5, điểm theo số bước, số lần gọi LLM và token từng lượt gọi, MD5 dữ liệu, vết suy luận. `--answer_format short`: yêu cầu đáp án ngắn (tiếng Việt khi `--lang vi`); `--cache_tag`: cache LLM riêng cho từng lượt chạy |
 | `merge_results.py` | Gộp các lô của cùng một cấu hình (`--start` / `--limit`) thành một file kết quả |
 | `rescore.py` | Chấm lại kết quả đã có theo file câu hỏi mới (ví dụ `vnhistory.json` bản 1.1), không gọi model |

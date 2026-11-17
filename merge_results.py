@@ -4,7 +4,8 @@
 
 Records are concatenated (a question that appears twice keeps the later file), sorted by "id",
 and the summary is recomputed from the records: EM, F1, EM_lenient, F1_lenient, scores by hop,
-recall@5, average LLM calls / tokens, total seconds and errors. Fields that must be identical in
+recall@5, average LLM calls / tokens, total seconds and errors; total_llm and plus_totals are summed
+over the batches. Fields that must be identical in
 every batch (dataset, method, llm, embedding, answer_format, llm_cache, tag, questions_md5) are
 checked; the run stops if they differ, so batches of different configurations are never mixed.
 """
@@ -15,7 +16,22 @@ import sys
 
 import run_colab as rc
 
+PLUS_KEYS = ("n_bindings", "bindings_applied", "s4_rejected", "s4_accepted", "n_dropped_clues",
+             "s5_extracted", "s5_reasked")
 SAME = ("dataset", "method", "llm", "embedding", "answer_format", "llm_cache", "tag", "questions_md5", "fixes")
+
+
+def sum_dicts(dicts):
+    """Sum numeric values key by key; None if no batch has the counter."""
+    dicts = [d for d in dicts if isinstance(d, dict)]
+    if not dicts:
+        return None
+    out = {}
+    for d in dicts:
+        for k, v in d.items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                out[k] = out.get(k, 0) + v
+    return out
 
 
 def merge(datas, run_name=None):
@@ -69,6 +85,13 @@ def merge(datas, run_name=None):
         "avg_completion_tokens": mean("completion_tokens", 1) if any("completion_tokens" in r for r in records)
         else weighted("avg_completion_tokens"),
         "avg_iterations": mean("iterations", 2),
+        "avg_retrieved_docs": mean("num_retrieved_docs", 2),
+        "pct_all_resolved": (round(100 * sum(bool(r.get("all_resolved")) for r in records) / n, 1)
+                             if any("all_resolved" in r for r in records) else first.get("pct_all_resolved")),
+        # per-batch counters are summed, not copied from the first batch
+        "total_llm": sum_dicts(d["summary"].get("total_llm") for d in datas),
+        "plus_totals": ({k: sum(r.get(k) or 0 for r in records) for k in PLUS_KEYS}
+                        if first.get("plus_totals") is not None else None),
         "max_completion_tokens": max((d["summary"].get("max_completion_tokens") or 0) for d in datas),
         "n_long_calls": sum((d["summary"].get("n_long_calls") or 0) for d in datas),
         "merged_from": [d["summary"].get("run_name") for d in datas],

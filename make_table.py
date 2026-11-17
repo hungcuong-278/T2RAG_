@@ -13,18 +13,28 @@ Outputs (in --out_dir, default "tables"):
     table_main.md   EM / F1 per dataset, split by number of hops, plus the average over datasets
     table_cost.md   LLM calls, tokens, rounds, recall@5 and seconds per question
     table_main.csv  one row per (dataset, method, group) with EM, F1, n, p-values
+
+Repeated runs (--pool_runs): files whose tags differ only by a run suffix (default "_r1", "_r2", ...)
+form one row; each question scores the mean over the runs that answered it, and the † test is the
+same paired bootstrap on those per-question means. The row label shows the number of runs.
+    python make_table.py --glob "results/*test116*_rescored.json" --pool_runs --baseline trag:test116
 """
 import argparse
+import copy
 import csv
 import glob
 import json
 import os
+import re
 from collections import OrderedDict, defaultdict
 
 import numpy as np
 
 
 # ---------------------------------------------------------------- loading
+VN_QID = re.compile(r"^[123]hop_\d+$")
+
+
 def load_runs(paths):
     """Return {(dataset, method): {"summary": [...], "records": {qid: record}}}.
 
@@ -35,6 +45,11 @@ def load_runs(paths):
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         s = data["summary"]
+        if not s.get("dataset"):  # v2 merged files have no summary.dataset
+            qids = [str(r.get("qid", "")) for r in data["records"]]
+            s["dataset"] = "vnhistory" if qids and all(VN_QID.match(q) for q in qids) else \
+                (s.get("run_name") or "unknown").split("_")[0]
+        s.setdefault("method", "unknown")
         # runs that differ only by --tag (e.g. another S4 threshold) are separate rows
         key = (s["dataset"], s["method"] + (f":{s['tag']}" if s.get("tag") else ""))
         run = runs.setdefault(key, {"summaries": [], "records": OrderedDict(), "files": []})
@@ -43,6 +58,38 @@ def load_runs(paths):
         for r in data["records"]:
             run["records"][str(r.get("qid", r["id"]))] = r
     return runs
+
+
+SCORE_KEYS = ("em", "f1", "em_lenient", "f1_lenient")
+
+
+def pool_runs(runs, suffix=r"_r\d+$"):
+    """Join runs whose tags differ only by `suffix`; each question gets the mean score over the runs."""
+    pat = re.compile(suffix)
+    groups = OrderedDict()
+    for (d, m), run in runs.items():
+        base_m = pat.sub("", m) if ":" in m else m
+        groups.setdefault((d, base_m), []).append(run)
+    pooled = OrderedDict()
+    for key, members in groups.items():
+        if len(members) == 1:
+            members[0]["n_runs"] = 1
+            pooled[key] = members[0]
+            continue
+        qids = list(OrderedDict.fromkeys(q for run in members for q in run["records"]))
+        records = OrderedDict()
+        for q in qids:
+            rs = [run["records"][q] for run in members if q in run["records"]]
+            rec = copy.deepcopy(rs[0])
+            for k in SCORE_KEYS:
+                vals = [float(r[k]) for r in rs if r.get(k) is not None]
+                rec[k] = float(np.mean(vals)) if vals else None
+            rec["n_runs"] = len(rs)
+            records[q] = rec
+        pooled[key] = {"summaries": [s for run in members for s in run["summaries"]], "records": records,
+                       "files": [f for run in members for f in run["files"]], "n_runs": len(members),
+                       "member_records": [run["records"] for run in members]}
+    return pooled
 
 
 def group_of(record):
@@ -92,6 +139,10 @@ def main(argv=None):
     ap.add_argument("--no_groups", action="store_true", help="Only the overall column per dataset")
     ap.add_argument("--metric", default="strict", choices=["strict", "lenient"],
                     help="strict = EM / F1 as in the paper; lenient = EM_lenient / F1_lenient (v6 result files)")
+    ap.add_argument("--pool_runs", nargs="?", const=r"_r\d+$", default=None, metavar="REGEX",
+                    help=r"Average repeated runs whose tags differ only by this suffix (default _r\d+$)")
+    ap.add_argument("--price_in", type=float, default=None, help="USD per million input tokens (adds a cost column)")
+    ap.add_argument("--price_out", type=float, default=None, help="USD per million output tokens")
     args = ap.parse_args(argv)
     em_key, f1_key = ("em", "f1") if args.metric == "strict" else ("em_lenient", "f1_lenient")
 
@@ -111,6 +162,12 @@ def main(argv=None):
     if not paths:
         raise SystemExit("No result files given.")
     runs = load_runs(paths)
+    if args.pool_runs:
+        runs = pool_runs(runs, args.pool_runs)
+
+    def row_label(m, labels_):
+        n_runs = next((run.get("n_runs", 1) for (_, mm), run in runs.items() if mm == m), 1)
+        return labels_.get(m, m) + (f" (TB {n_runs} lượt)" if n_runs > 1 else "")
 
     labels = {}
     if args.labels:
@@ -199,7 +256,7 @@ def main(argv=None):
         header += ["TB EM", "TB F1"]
     lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
     for m in methods:
-        row = [labels.get(m, m)] + [cell_text(m, d, g) for d, g in columns]
+        row = [row_label(m, labels)] + [cell_text(m, d, g) for d, g in columns]
         if len(datasets) > 1:
             row += [fmt(avg[m][0], args.decimal), fmt(avg[m][1], args.decimal)] if m in avg else ["–", "–"]
         lines.append("| " + " | ".join(row) + " |")
@@ -213,15 +270,17 @@ def main(argv=None):
         f.write(main_md)
 
     # Cost table.
+    priced = args.price_in is not None and args.price_out is not None
     cost_header = ["Phương pháp", "Bộ dữ liệu", "Số câu", "Gọi LLM/câu", "Token vào/câu", "Token ra/câu",
-                   "Số vòng TB", "% giải hết", "Recall@5", "Giây/câu", "Câu lỗi"]
+                   "Số vòng TB", "% giải hết", "Recall@5", "Giây/câu", "Câu lỗi"] + (["USD/câu"] if priced else [])
     cost_lines = ["| " + " | ".join(cost_header) + " |", "|" + "---|" * len(cost_header)]
     for m in methods:
         for d in datasets:
             run = runs.get((d, m))
             if run is None:
                 continue
-            recs = list(run["records"].values())
+            # cost columns read every answered record (all runs when pooled), not the pooled scores
+            recs = [r for rr in run.get("member_records", [run["records"]]) for r in rr.values()]
             sums = run["summaries"]
             n = len(recs)
             calls = mean_or_none([r.get("llm_calls") for r in recs])
@@ -239,10 +298,12 @@ def main(argv=None):
             r5 = 100 * found5 / total if total and any("gold_docs_found_first5" in r for r in recs) else None
             secs = sum(s.get("seconds") or 0 for s in sums) / n if n else None
             errors = sum(r.get("prediction") == "Error processing query" for r in recs)
+            usd = ((ptok or 0) * args.price_in + (ctok or 0) * args.price_out) / 1e6 if priced and ptok else None
             cost_lines.append("| " + " | ".join([
-                labels.get(m, m), d, str(n), fmt(calls, args.decimal, 2), fmt(ptok, args.decimal, 0),
+                row_label(m, labels), d, str(n), fmt(calls, args.decimal, 2), fmt(ptok, args.decimal, 0),
                 fmt(ctok, args.decimal, 0), fmt(iters, args.decimal, 2), fmt(pct, args.decimal),
-                fmt(r5, args.decimal), fmt(secs, args.decimal), str(errors)]) + " |")
+                fmt(r5, args.decimal), fmt(secs, args.decimal), str(errors)] +
+                ([fmt(usd, args.decimal, 4)] if priced else [])) + " |")
     cost_md = "\n".join(cost_lines) + "\n\nRecall@5 = % đoạn vàng nằm trong 5 đoạn đầu được lấy.\n"
     with open(os.path.join(args.out_dir, "table_cost.md"), "w", encoding="utf-8") as f:
         f.write(cost_md)

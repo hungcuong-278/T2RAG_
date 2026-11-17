@@ -50,6 +50,12 @@ class TestOurScripts(unittest.TestCase):
         with LangEnv("vi"):
             self.assertEqual(run_colab.em_f1("Tràng An", ["tràng an"])[0], 1.0)
             self.assertEqual(run_colab.em_f1("An Nam", ["Tràng An"])[0], 0.0)
+            # one tone placement: the corpus mixes "hoá" (30x) and "hóa"
+            self.assertEqual(run_colab.em_f1("Thuận Hoá", ["Thuận Hóa"])[0], 1.0)
+            self.assertEqual(run_colab.em_f1("thuỷ quân", ["Thủy quân"])[0], 1.0)
+            self.assertEqual(run_colab.em_f1("Hóa", ["Hòa"])[0], 0.0)  # different tones stay different
+            for w in ("hoàng", "thuyết", "quý", "gì", "giữ", "người", "tuổi", "khuya", "quyền", "Tràng An"):
+                self.assertEqual(run_colab.normalize(w), w.lower())  # standard spelling is unchanged
         with LangEnv("en"):
             self.assertEqual(run_colab.em_f1("the Beatles", ["Beatles"])[0], 1.0)
 
