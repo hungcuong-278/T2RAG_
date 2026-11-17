@@ -177,7 +177,9 @@
   "id": "2hop_003",
   "question": "Vị vua đi xem đánh cá ở hồ Dâm Đàm vào tháng 11 năm Ất Hợi (1095) có tên thật là gì?",
   "answer": "Càn Đức",
-  "answer_aliases": [],
+  "answer_aliases": [
+   "Lý Càn Đức"
+  ],
   "paragraphs": [
    {
     "idx": 0,
@@ -406,7 +408,10 @@
   "id": "1hop_004",
   "question": "Lý Nhân Tông là con trai đầu lòng của vị vua nào?",
   "answer": "Lý Thánh Tông",
-  "answer_aliases": [],
+  "answer_aliases": [
+   "Lý Thánh Tôn",
+   "Lý Nhật Tôn"
+  ],
   "paragraphs": [
    {
     "idx": 0,
@@ -678,7 +683,8 @@
   "question": "Con trai của người chồng được Lý Chiêu Hoàng nhường ngôi về sau đã nhường ngôi cho ai?",
   "answer": "Trần Khâm",
   "answer_aliases": [
-   "Trần Nhân Tông"
+   "Trần Nhân Tông",
+   "Trần Nhân Tôn"
   ],
   "paragraphs": [
    {
@@ -933,7 +939,8 @@
   "question": "Ông nội của vị tướng mà danh tiếng của Phạm Ngũ Lão chỉ xếp sau là ai?",
   "answer": "Trần Thừa",
   "answer_aliases": [
-   "Trần Thái Tổ"
+   "Trần Thái Tổ",
+   "Trần Huy Tông"
   ],
   "paragraphs": [
    {
@@ -1689,7 +1696,9 @@
   "id": "3hop_012",
   "question": "Cha của chính thất của người đã lật đổ nhà Trần, lập nên triều đại mà Nguyễn Trãi làm Ngự sử đài chính chưởng, có tên thật là gì?",
   "answer": "Trần Mạnh",
-  "answer_aliases": [],
+  "answer_aliases": [
+   "Mạnh"
+  ],
   "paragraphs": [
    {
     "idx": 0,
@@ -1736,7 +1745,8 @@
   "question": "Vua Chiêm Thành Chế Mân còn có tên gọi khác là gì?",
   "answer": "Jaya Simhavarman III",
   "answer_aliases": [
-   "R'cam Mal"
+   "R'cam Mal",
+   "Jaya Sinhavarman III"
   ],
   "paragraphs": [
    {
@@ -1831,7 +1841,10 @@
   "id": "1hop_016",
   "question": "Vua Lê Nhân Tông bị ai sát hại?",
   "answer": "Lê Nghi Dân",
-  "answer_aliases": [],
+  "answer_aliases": [
+   "Lệ Đức hầu",
+   "Lạng Sơn vương"
+  ],
   "paragraphs": [
    {
     "idx": 0,
@@ -2343,7 +2356,9 @@
   "id": "2hop_031",
   "question": "Vị vua để di chiếu giao Tô Hiến Thành làm phụ chính có tên thật là gì?",
   "answer": "Lý Thiên Tộ",
-  "answer_aliases": [],
+  "answer_aliases": [
+   "Thiên Tộ"
+  ],
   "paragraphs": [
    {
     "idx": 0,
@@ -2487,7 +2502,11 @@
   "id": "1hop_023",
   "question": "Trùng Quang Đế là cháu nội của vị vua nào?",
   "answer": "Trần Nghệ Tông",
-  "answer_aliases": [],
+  "answer_aliases": [
+   "Trần Phủ",
+   "Nghệ Hoàng",
+   "Trần Thúc Minh"
+  ],
   "paragraphs": [
    {
     "idx": 0,
@@ -4176,7 +4195,8 @@
   "question": "Tên thật của vua Lý Huệ Tông là gì?",
   "answer": "Lý Sảm",
   "answer_aliases": [
-   "Lý Hạo Sảm"
+   "Lý Hạo Sảm",
+   "Sảm"
   ],
   "paragraphs": [
    {
@@ -4465,7 +4485,9 @@
   "id": "3hop_028",
   "question": "Vị vua nhà Lý có vợ phải lòng viên quan mà sau khi người này chết năm 1158, vua Anh Tông phong Tô Hiến Thành làm thái úy, trị vì bao nhiêu năm?",
   "answer": "10 năm",
-  "answer_aliases": [],
+  "answer_aliases": [
+   "mười năm"
+  ],
   "paragraphs": [
    {
     "idx": 0,
@@ -4848,7 +4870,9 @@
   "id": "2hop_062",
   "question": "Vị trạng nguyên được lệnh viết văn bia phong thần cho đền thờ Nguyễn Xí năm 1467 đỗ đầu dưới đời vua nào?",
   "answer": "Lê Thái Tông",
-  "answer_aliases": [],
+  "answer_aliases": [
+   "Lê Nguyên Long"
+  ],
   "paragraphs": [
    {
     "idx": 0,
@@ -5018,7 +5042,9 @@
   "id": "2hop_064",
   "question": "Vị vua đã ra lệnh cho Lê Văn Hưu biên soạn Đại Việt sử ký có tên thật là gì?",
   "answer": "Trần Cảnh",
-  "answer_aliases": [],
+  "answer_aliases": [
+   "Cảnh"
+  ],
   "paragraphs": [
    {
     "idx": 0,
@@ -5561,7 +5587,10 @@
   "answer": "Trần Quốc Tuấn",
   "answer_aliases": [
    "Trần Hưng Đạo",
-   "Hưng Đạo Vương"
+   "Hưng Đạo Vương",
+   "Hưng Đạo Vương Trần Quốc Tuấn",
+   "Hưng Đạo Đại Vương",
+   "Hưng Đạo đại vương Trần Quốc Tuấn"
   ],
   "paragraphs": [
    {

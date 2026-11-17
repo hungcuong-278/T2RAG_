@@ -1,0 +1,150 @@
+{
+ "version": "1.1",
+ "previous_version": "1.0",
+ "md5": {
+  "1.0": "b07cfa13dc9abc164da85f5b201471f5",
+  "1.1": "1c08823261d204eb1fbdf5334bee88c4"
+ },
+ "scope": "answer_aliases only; questions, answers, supporting paragraphs, order and dev/test split unchanged",
+ "rules": [
+  "Add a form only if it names the same person/value and is attested in the corpus or a standard source (alias review K7)",
+  "Entity-level consistency: questions with the same answer and the same kind of name get the same short forms",
+  "A temple or era name is not added where the question asks for the birth/personal name (2hop_060 keeps no alias)",
+  "Skip forms equal to the answer (case-insensitive) or already present"
+ ],
+ "added": [
+  {
+   "qid": "2hop_003",
+   "split": "dev",
+   "answer": "Càn Đức",
+   "added_aliases": [
+    "Lý Càn Đức"
+   ]
+  },
+  {
+   "qid": "1hop_004",
+   "split": "dev",
+   "answer": "Lý Thánh Tông",
+   "added_aliases": [
+    "Lý Thánh Tôn",
+    "Lý Nhật Tôn"
+   ]
+  },
+  {
+   "qid": "3hop_005",
+   "split": "dev",
+   "answer": "Trần Khâm",
+   "added_aliases": [
+    "Trần Nhân Tôn"
+   ]
+  },
+  {
+   "qid": "3hop_007",
+   "split": "dev",
+   "answer": "Trần Thừa",
+   "added_aliases": [
+    "Trần Huy Tông"
+   ]
+  },
+  {
+   "qid": "3hop_012",
+   "split": "dev",
+   "answer": "Trần Mạnh",
+   "added_aliases": [
+    "Mạnh"
+   ]
+  },
+  {
+   "qid": "1hop_015",
+   "split": "dev",
+   "answer": "Jaya Simhavarman III",
+   "added_aliases": [
+    "Jaya Sinhavarman III"
+   ]
+  },
+  {
+   "qid": "1hop_016",
+   "split": "test",
+   "answer": "Lê Nghi Dân",
+   "added_aliases": [
+    "Lệ Đức hầu",
+    "Lạng Sơn vương"
+   ]
+  },
+  {
+   "qid": "2hop_031",
+   "split": "test",
+   "answer": "Lý Thiên Tộ",
+   "added_aliases": [
+    "Thiên Tộ"
+   ]
+  },
+  {
+   "qid": "1hop_023",
+   "split": "test",
+   "answer": "Trần Nghệ Tông",
+   "added_aliases": [
+    "Trần Phủ",
+    "Nghệ Hoàng",
+    "Trần Thúc Minh"
+   ]
+  },
+  {
+   "qid": "1hop_041",
+   "split": "test",
+   "answer": "Lý Sảm",
+   "added_aliases": [
+    "Sảm"
+   ]
+  },
+  {
+   "qid": "3hop_028",
+   "split": "test",
+   "answer": "10 năm",
+   "added_aliases": [
+    "mười năm"
+   ]
+  },
+  {
+   "qid": "2hop_062",
+   "split": "test",
+   "answer": "Lê Thái Tông",
+   "added_aliases": [
+    "Lê Nguyên Long"
+   ]
+  },
+  {
+   "qid": "2hop_064",
+   "split": "test",
+   "answer": "Trần Cảnh",
+   "added_aliases": [
+    "Cảnh"
+   ]
+  },
+  {
+   "qid": "2hop_071",
+   "split": "test",
+   "answer": "Trần Quốc Tuấn",
+   "added_aliases": [
+    "Hưng Đạo Vương Trần Quốc Tuấn",
+    "Hưng Đạo Đại Vương",
+    "Hưng Đạo đại vương Trần Quốc Tuấn"
+   ]
+  }
+ ],
+ "errata": [
+  {
+   "qid": "3hop_008",
+   "split": "dev",
+   "status": "disputed_key",
+   "note": "Some sources distinguish Po Binasuor from Che Bong Nga; kept in the file so the split does not shift. Report dev EM with and without it (n=49). Every method scores 0 on it."
+  },
+  {
+   "qid": "2hop_032",
+   "split": "test",
+   "status": "date_erratum",
+   "note": "Question says 1371; Toan thu dates the overthrow to 1370. The answer (Tran Nhat Kien) is unaffected; question text left unchanged."
+  }
+ ],
+ "rescoring": "Saved predictions are rescored with rescore.py --questions reproduce/dataset/vnhistory.json; no model calls."
+}

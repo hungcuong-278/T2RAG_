@@ -10,7 +10,8 @@ Vietnamese history corpus (Lý – Trần – Hồ – Lê sơ, 1009–1527) and
 | `data_vi/release/openie_results_ner.json` | OpenIE for all 896 passages: 12,015 entities, 10,815 triples (12.1 per passage). MD5 `f6ff5da78046518fc3458c495fd2895a` |
 | `data_vi/work/chunks_meta.jsonl` | Per-passage metadata: short id (`c0000`–`c0895`), section, source page and revision |
 | `data_vi/articles.txt` | The 158 article titles |
-| `reproduce/dataset/vnhistory.json` | 166 reviewed questions (58 one-hop, 73 two-hop, 35 three-hop), MuSiQue layout; dev = first 50 (15/23/12), test = 116 (43/50/23). MD5 `b07cfa13dc9abc164da85f5b201471f5` |
+| `reproduce/dataset/vnhistory.json` | 166 reviewed questions (58 one-hop, 73 two-hop, 35 three-hop), MuSiQue layout; dev = first 50 (15/23/12), test = 116 (43/50/23). Version 1.1, MD5 `1c08823261d204eb1fbdf5334bee88c4` (1.0: `b07cfa13…`) |
+| `data_vi/release/vnhistory_v1.1_changes.json` | 1.0 → 1.1: 20 aliases added to 14 questions after the alias review, plus errata (3hop_008 disputed key, 2hop_032 date). Rescore old runs with `rescore.py` |
 | `data_vi/gw_proxy.py` | Local OpenAI-compatible endpoint in front of the Anthropic-format gateway, so `run_colab.py` can use it unchanged |
 | `data_vi/*.py` | Pipeline scripts (below) |
 
