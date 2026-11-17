@@ -52,14 +52,16 @@ code("""
 import os, glob, json, subprocess, time
 from google.colab import drive
 drive.mount('/content/drive')
+TEAM_BRANCH = 'main'  #@param {type:"string"}
+os.environ['TEAM_BRANCH'] = TEAM_BRANCH  # branch of the team repo to clone (e.g. a branch under review)
 """)
 code(f"""
 %%bash
 set -e
 cd /content
 [ -d T2RAG ] || git clone -q {PAPER_REPO}
-rm -rf team && git clone -q --depth 1 {TEAM_REPO} team
-echo "Code nhóm: commit $(git -C team rev-parse --short HEAD) - $(git -C team log -1 --format=%s)"
+rm -rf team && git clone -q --depth 1 -b "${{TEAM_BRANCH:-main}}" {TEAM_REPO} team
+echo "Code nhóm: nhánh ${{TEAM_BRANCH:-main}}, commit $(git -C team rev-parse --short HEAD) - $(git -C team log -1 --format=%s)"
 pip install -q openai tenacity filelock python-igraph sentence-transformers anthropic
 rsync -a --exclude .git --exclude README.md --exclude notebooks /content/team/ /content/T2RAG/
 cd /content/T2RAG && python patch_t2rag.py
@@ -289,11 +291,18 @@ Chỉ chạy test với S5 **sau khi** dev cho thấy S5 có ích (so từng câ
 """)
 code("""
 S5_CFG = 'b,s1,s2,s3,s4,s5'  #@param {type:"string"}
-for r in ['r1', 'r2']:
+S5_RUNS = 'r1'  #@param {type:"string"}
+DEV_RUNS = globals().get('DEV_RUNS', {})
+for r in [x.strip() for x in S5_RUNS.split(',') if x.strip()]:
     DEV_RUNS[(S5_CFG, r)] = run_batches('vnhistory', 'trag_plus', 0, 50, f"dev50_plus_{S5_CFG.replace(',', '_')}_{r}",
                                         extra=f'--cache_tag {r} --fixes {S5_CFG}')
     usage()
-!python compare_methods.py {DEV_RUNS[(S5_CFG, 'r1')]} {DEV_RUNS.get(('b,s1,s2,s3,s4', 'r1'), DEV_RUNS[(S5_CFG, 'r1')])}
+    # same run without s5 (same cache): which questions changed
+    full = glob.glob(f"outputs/results/vnhistory_trag_plus_fx-b-s1-s2-s3-s4_{LLM_LABEL}_dev50_plus_b_s1_s2_s3_s4_{r}.json")
+    if full:
+        subprocess.run(['python', 'compare_methods.py', DEV_RUNS[(S5_CFG, r)], full[0]])
+    else:
+        print('Chưa có lượt full dev', r, 'để so sánh')
 """)
 
 md("""
@@ -308,8 +317,10 @@ TEST_BASE_TAG = 'test116'  #@param {type:"string"}
 # --pool_runs averages r1 / r2 per question and tests on the per-question means
 !python rescore.py outputs/results/vnhistory_*_{LLM_LABEL}_test116_*.json outputs/results/vnhistory_trag_{LLM_LABEL}_*{TEST_BASE_TAG}*.json --questions reproduce/dataset/vnhistory.json --out_dir outputs/results/rescored
 !python make_table.py --glob "outputs/results/rescored/*.json" --pool_runs --baseline trag:{TEST_BASE_TAG} --price_in 0.75 --price_out 3.75 --out_dir tables/vn_test
-T_BEST = TEST_RUNS['r1']
-!python error_analysis.py {T_BEST}
+TEST_RUNS = globals().get('TEST_RUNS', {})
+T_BEST = TEST_RUNS.get('r1') or (sorted(glob.glob(f"outputs/results/vnhistory_trag_plus_*_{LLM_LABEL}_test116_plus_*_r1.json")) or [''])[-1]
+if T_BEST:
+    subprocess.run(['python', 'error_analysis.py', T_BEST])
 backup()
 """)
 
