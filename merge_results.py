@@ -70,6 +70,8 @@ def merge(datas, run_name=None):
         "start": min((d["summary"].get("start") or 0) for d in datas),
         "num_questions": n,
         "ExactMatch": mean("em"), "F1": mean("f1"),
+        # the repo's own EM / F1 is per batch and cannot be recombined: weighted mean of the batches
+        "ExactMatch_repo": weighted("ExactMatch_repo"), "F1_repo": weighted("F1_repo"),
         "EM_lenient": mean("em_lenient"), "F1_lenient": mean("f1_lenient"),
         "n_long_answers": sum(bool(r.get("long_answer")) for r in records),
         "n_multi_answers": sum(bool(r.get("multi_answer")) for r in records),
