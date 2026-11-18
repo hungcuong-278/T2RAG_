@@ -19,6 +19,10 @@ except a bare 400 "bad request", which the gateway returns at random and which g
 --timeout is a read timeout of the HTTP client, so a reply that trickles in never hits it (calls of
 290-990 s were seen). --deadline caps the whole attempt: past it the proxy stops waiting, logs a
 "deadline" error and retries (the abandoned call may still finish and be billed by the gateway).
+
+--thinking off (default) sends thinking={"type": "disabled"}. From 2026-11-18 evening the gateway's
+gemini-3.8-flash thinks by default (hidden reasoning tokens, billed as output); all results before that
+were produced without thinking, so it is switched off to keep runs comparable.
 """
 import argparse
 import collections
@@ -41,12 +45,13 @@ def load_keys():
 
 
 class Upstream:
-    def __init__(self, keys, max_tokens, timeout, retries, deadline=None):
+    def __init__(self, keys, max_tokens, timeout, retries, deadline=None, thinking="off"):
         if not keys:
             sys.exit("No GWAI_API_KEY* variable set")
         self.keys, self.i, self.lock = keys, 0, threading.Lock()
         self.max_tokens, self.timeout, self.retries = max_tokens, timeout, retries
         self.deadline = deadline or timeout
+        self.thinking = thinking
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=64)
         self.usage = {"calls": 0, "errors": 0, "in": 0, "out": 0}
         self.error_kinds = collections.Counter()
@@ -70,6 +75,8 @@ class Upstream:
         turns = [{"role": m["role"], "content": m["content"]} for m in msgs if m["role"] in ("user", "assistant")]
         kwargs = {"model": body["model"], "max_tokens": self.max_tokens, "messages": turns,
                   "extra_body": {"temperature": body.get("temperature", 0) or 0}}
+        if self.thinking == "off":
+            kwargs["extra_body"]["thinking"] = {"type": "disabled"}
         if system:
             kwargs["system"] = system
         bad_request_retried = False
@@ -172,10 +179,13 @@ def main():
     ap.add_argument("--retries", type=int, default=3, help="Quick retries inside the proxy before reporting an error")
     ap.add_argument("--deadline", type=float, default=None,
                     help="Total seconds for one attempt, however slowly the reply arrives (default: --timeout)")
+    ap.add_argument("--thinking", choices=["off", "default"], default="off",
+                    help="off: ask the gateway for no hidden reasoning (as in all runs before 2026-11-18 evening); "
+                         "default: send nothing and let the gateway decide")
     args = ap.parse_args()
     keys = load_keys()
-    up = Upstream(keys, args.max_tokens, args.timeout, args.retries, args.deadline)
-    print(f"[gw_proxy] {len(keys)} key(s); listening on http://localhost:{args.port}/v1", flush=True)
+    up = Upstream(keys, args.max_tokens, args.timeout, args.retries, args.deadline, args.thinking)
+    print(f"[gw_proxy] {len(keys)} key(s); thinking={args.thinking}; listening on http://localhost:{args.port}/v1", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(up, args.model)).serve_forever()
 
 
