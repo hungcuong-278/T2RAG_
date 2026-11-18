@@ -91,6 +91,15 @@ class TestMakeTable(unittest.TestCase):
         self.assertIn("| trag_plus:test (TB 2 lượt) | vnhistory | 40 |", cost)
         self.assertIn("USD/câu", cost)
 
+    def test_two_sided(self):
+        from make_table import paired_bootstrap_p
+        a = [1.0] * 12 + [0.0] * 88
+        b = [0.0] * 6 + [1.0] * 12 + [0.0] * 82  # same mean as a: two-sided p near 1
+        self.assertGreater(paired_bootstrap_p(a, b, 2000, two_sided=True), 0.9)
+        c = [0.0] * 100
+        one, two = paired_bootstrap_p(a, c, 2000), paired_bootstrap_p(a, c, 2000, two_sided=True)
+        self.assertLessEqual(one, two)
+
     def test_bootstrap(self):
         from make_table import paired_bootstrap_p
         self.assertEqual(paired_bootstrap_p([1, 1, 1], [1, 1, 1]), 1.0)

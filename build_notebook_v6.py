@@ -316,7 +316,7 @@ TEST_BASE_TAG = 'test116'  #@param {type:"string"}
 # merged files only (chunk files are named ..._from50_10q_test116...), rescored on the current vnhistory.json;
 # --pool_runs averages r1 / r2 per question and tests on the per-question means
 !python rescore.py outputs/results/vnhistory_*_{LLM_LABEL}_test116_*.json outputs/results/vnhistory_trag_{LLM_LABEL}_*{TEST_BASE_TAG}*.json --questions reproduce/dataset/vnhistory.json --out_dir outputs/results/rescored
-!python make_table.py --glob "outputs/results/rescored/*.json" --pool_runs --baseline trag:{TEST_BASE_TAG} --price_in 0.75 --price_out 3.75 --out_dir tables/vn_test
+!python make_table.py --glob "outputs/results/rescored/*.json" --pool_runs --two_sided --baseline trag:{TEST_BASE_TAG} --price_in 0.75 --price_out 3.75 --out_dir tables/vn_test
 TEST_RUNS = globals().get('TEST_RUNS', {})
 T_BEST = TEST_RUNS.get('r1') or (sorted(glob.glob(f"outputs/results/vnhistory_trag_plus_*_{LLM_LABEL}_test116_plus_*_r1.json")) or [''])[-1]
 if T_BEST:

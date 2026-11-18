@@ -98,8 +98,9 @@ def group_of(record):
 
 
 # ---------------------------------------------------------------- statistics
-def paired_bootstrap_p(a, b, n_boot=5000, seed=0):
-    """One-sided p-value for mean(a) > mean(b) on paired per-question scores."""
+def paired_bootstrap_p(a, b, n_boot=5000, seed=0, two_sided=False):
+    """p-value for mean(a) > mean(b) on paired per-question scores (one-sided, as in the paper).
+    two_sided: p for mean(a) != mean(b), i.e. twice the smaller tail, capped at 1."""
     a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
     if len(a) == 0:
         return None
@@ -109,6 +110,8 @@ def paired_bootstrap_p(a, b, n_boot=5000, seed=0):
     rng = np.random.default_rng(seed)
     idx = rng.integers(0, len(diff), size=(n_boot, len(diff)))
     means = diff[idx].mean(axis=1)
+    if two_sided:
+        return float(min(1.0, 2 * min(np.mean(means <= 0), np.mean(means >= 0))))
     return float(np.mean(means <= 0))
 
 
@@ -134,6 +137,8 @@ def main(argv=None):
                     help='JSON file {"method name": "row label"}; also fixes the row order')
     ap.add_argument("--out_dir", default="tables")
     ap.add_argument("--n_boot", type=int, default=5000)
+    ap.add_argument("--two_sided", action="store_true",
+                    help="Two-sided bootstrap test for † (default one-sided, as in the paper)")
     ap.add_argument("--alpha", type=float, default=0.05)
     ap.add_argument("--decimal", default=",", help="Decimal separator in the tables (default ',')")
     ap.add_argument("--no_groups", action="store_true", help="Only the overall column per dataset")
@@ -213,8 +218,8 @@ def main(argv=None):
                     b_em = [score(base["records"][q], em_key) for q in common]
                     a_f1 = [score(recs[q], f1_key) for q in common]
                     b_f1 = [score(base["records"][q], f1_key) for q in common]
-                    cell["p_em"] = paired_bootstrap_p(a_em, b_em, args.n_boot)
-                    cell["p_f1"] = paired_bootstrap_p(a_f1, b_f1, args.n_boot)
+                    cell["p_em"] = paired_bootstrap_p(a_em, b_em, args.n_boot, two_sided=args.two_sided)
+                    cell["p_f1"] = paired_bootstrap_p(a_f1, b_f1, args.n_boot, two_sided=args.two_sided)
                     cell["n_common"] = len(common)
             cells[(m, d, g)] = cell
             rows_csv.append({"dataset": d, "method": m, "label": labels.get(m, m), "group": g or "all",
@@ -235,7 +240,9 @@ def main(argv=None):
         parts = []
         for key, pkey, bi in (("em", "p_em", 0), ("f1", "p_f1", 1)):
             t = fmt(c[key], args.decimal)
-            if c[pkey] is not None and c[pkey] < args.alpha:
+            base = cells.get((args.baseline, d, g))
+            # † marks "better than the baseline": with --two_sided a significantly worse run gets none
+            if c[pkey] is not None and c[pkey] < args.alpha and (base is None or c[key] > base[key]):
                 t += "†"
             if abs(c[key] - best[(d, g)][bi]) < 1e-9 and sum((mm, d, g) in cells for mm in methods) > 1:
                 t = f"**{t}**"
@@ -264,7 +271,8 @@ def main(argv=None):
         f"{d} {'tổng' if g is None else g} = {max((cells[(m, d, g)]['n'] for m in methods if (m, d, g) in cells), default=0)}"
         for d, g in columns)
     note = (f"\nÔ = {'EM / F1' if args.metric == 'strict' else 'EM_lenient / F1_lenient'} (×100). **Đậm** = tốt nhất cột. † = hơn `{labels.get(args.baseline, args.baseline)}` "
-            f"có ý nghĩa (bootstrap ghép cặp {args.n_boot} lần, p < {args.alpha}). {n_line}.\n")
+            f"có ý nghĩa (bootstrap ghép cặp {args.n_boot} lần, {'hai phía' if args.two_sided else 'một phía'}, "
+            f"p < {args.alpha}). {n_line}.\n")
     main_md = "\n".join(lines) + "\n" + note
     with open(os.path.join(args.out_dir, "table_main.md"), "w", encoding="utf-8") as f:
         f.write(main_md)
